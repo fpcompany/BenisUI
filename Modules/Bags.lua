@@ -84,6 +84,47 @@ local function GetSlotItemLevel(bagID, slotID, hyperlink)
 	return nil, isGear, equipLoc
 end
 
+-- inventory slots a bag item competes with, per equip location
+local EQUIP_LOC_SLOTS = {
+	INVTYPE_HEAD = {1}, INVTYPE_NECK = {2}, INVTYPE_SHOULDER = {3},
+	INVTYPE_CHEST = {5}, INVTYPE_ROBE = {5}, INVTYPE_WAIST = {6},
+	INVTYPE_LEGS = {7}, INVTYPE_FEET = {8}, INVTYPE_WRIST = {9},
+	INVTYPE_HAND = {10}, INVTYPE_FINGER = {11, 12}, INVTYPE_TRINKET = {13, 14},
+	INVTYPE_CLOAK = {15},
+	INVTYPE_WEAPON = {16, 17},
+	INVTYPE_2HWEAPON = {16},
+	INVTYPE_WEAPONMAINHAND = {16},
+	INVTYPE_WEAPONOFFHAND = {17},
+	INVTYPE_SHIELD = {17},
+	INVTYPE_HOLDABLE = {17},
+	INVTYPE_RANGED = {16},
+	INVTYPE_RANGEDRIGHT = {16},
+}
+
+local function GetEquippedItemLevel(invSlot)
+	local location = ItemLocation:CreateFromEquipmentSlot(invSlot)
+	if DoesItemExist(location) then
+		return GetCurrentItemLevel(location) or 0
+	end
+	return 0 -- empty slot: anything is an upgrade
+end
+
+-- higher item level than the weakest equipped item this piece competes with?
+local function IsItemLevelUpgrade(itemLevel, equipLoc)
+	local invSlots = itemLevel and EQUIP_LOC_SLOTS[equipLoc]
+	if not invSlots then return false end
+
+	local lowest
+	for _, invSlot in ipairs(invSlots) do
+		local equipped = GetEquippedItemLevel(invSlot)
+		if not lowest or equipped < lowest then
+			lowest = equipped
+		end
+	end
+
+	return lowest ~= nil and itemLevel > lowest
+end
+
 -- extra search words per equip location, on top of the localized slot name
 local EQUIP_LOC_EXTRA_WORDS = {
 	INVTYPE_FINGER = 'ring',
@@ -270,6 +311,13 @@ function Bags:CreateSlot(bagID, slotID)
 	if slot.NewItemTexture then slot.NewItemTexture:Hide() end
 	if slot.BattlepayItemTexture then slot.BattlepayItemTexture:Hide() end
 
+	-- the template's green up-arrow; we drive it ourselves
+	if slot.UpgradeIcon then
+		slot.UpgradeIcon:ClearAllPoints()
+		slot.UpgradeIcon:SetPoint('TOPLEFT', 1, -1)
+		slot.UpgradeIcon:Hide()
+	end
+
 	SetSlotBorder(slot, BORDER_THIN, EMPTY_R, EMPTY_G, EMPTY_B)
 
 	return slot
@@ -293,6 +341,10 @@ function Bags:UpdateSlot(slot)
 	-- grey out junk and gear below the Hero/Myth upgrade tracks (crafted exempt)
 	local lowTrack = isGear and not (isCrafted or HasKeepTrackWord(trackText))
 	local desaturated = hasItem and (info.isLocked or isJunk or lowTrack)
+
+	if slot.UpgradeIcon then
+		slot.UpgradeIcon:SetShown(isGear and IsItemLevelUpgrade(itemLevel, equipLoc))
+	end
 
 	SetItemButtonTexture(slot, icon)
 	SetItemButtonCount(slot, info and info.stackCount or 0)
@@ -750,6 +802,7 @@ local BAG_EVENTS = {
 	'BAG_UPDATE_DELAYED',
 	'BAG_UPDATE_COOLDOWN',
 	'ITEM_LOCK_CHANGED',
+	'PLAYER_EQUIPMENT_CHANGED',
 	'PLAYER_MONEY',
 }
 
@@ -766,6 +819,8 @@ function Bags:OnEvent(event, arg1, arg2)
 		end
 	elseif event == 'BAG_UPDATE_DELAYED' then
 		self:UpdateAll()
+	elseif event == 'PLAYER_EQUIPMENT_CHANGED' then
+		self:UpdateAll() -- equipped ilvls changed; recompute upgrade arrows
 	elseif event == 'BAG_UPDATE_COOLDOWN' then
 		self:UpdateCooldowns()
 	elseif event == 'ITEM_LOCK_CHANGED' then
