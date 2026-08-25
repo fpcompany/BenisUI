@@ -149,6 +149,22 @@ function Bags:CreateSlot(bagID, slotID)
 	slot.itemLevel = slot.qualityBorder:CreateFontString(nil, 'OVERLAY', 'NumberFontNormalSmall')
 	slot.itemLevel:SetPoint('BOTTOMRIGHT', slot, 'BOTTOMRIGHT', -2, 2)
 
+	-- pulsing glow for openable containers (lockboxes, caches, clams...)
+	slot.openableGlow = slot.qualityBorder:CreateTexture(nil, 'OVERLAY')
+	slot.openableGlow:SetAtlas('bags-glow-white')
+	slot.openableGlow:SetAllPoints(slot)
+	slot.openableGlow:SetBlendMode('ADD')
+	slot.openableGlow:SetVertexColor(1, 0.82, 0.2)
+	slot.openableGlow:Hide()
+
+	local pulse = slot.openableGlow:CreateAnimationGroup()
+	pulse:SetLooping('BOUNCE')
+	local alpha = pulse:CreateAnimation('Alpha')
+	alpha:SetFromAlpha(0.2)
+	alpha:SetToAlpha(0.9)
+	alpha:SetDuration(0.6)
+	slot.openableGlow.pulse = pulse
+
 	-- template decorations we do not drive
 	if slot.NewItemTexture then slot.NewItemTexture:Hide() end
 	if slot.BattlepayItemTexture then slot.BattlepayItemTexture:Hide() end
@@ -165,9 +181,22 @@ function Bags:UpdateSlot(slot)
 	local quality = info and info.quality
 	local hasItem = icon ~= nil
 
+	local isJunk = quality == Enum.ItemQuality.Poor
+
 	SetItemButtonTexture(slot, icon)
 	SetItemButtonCount(slot, info and info.stackCount or 0)
-	SetItemButtonDesaturated(slot, info and info.isLocked)
+	SetItemButtonDesaturated(slot, info and (info.isLocked or isJunk))
+
+	local openable = hasItem and info.hasLoot and not info.isLocked
+	if openable then
+		slot.openableGlow:Show()
+		if not slot.openableGlow.pulse:IsPlaying() then
+			slot.openableGlow.pulse:Play()
+		end
+	else
+		slot.openableGlow.pulse:Stop()
+		slot.openableGlow:Hide()
+	end
 
 	if slot.UpdateCooldown and slot.Cooldown then
 		slot:UpdateCooldown(hasItem)
