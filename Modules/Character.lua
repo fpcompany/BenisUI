@@ -27,6 +27,70 @@ local function GetQualityColor(quality)
 end
 
 --------------------------------------------------------------------------------
+-- Frame reskin (match the BenisUI bag frame)
+--------------------------------------------------------------------------------
+
+local EDGE_TEXTURE = 'Interface\\Buttons\\WHITE8X8'
+
+local function StripTextures(frame)
+	if not frame then return end
+
+	for _, region in next, { frame:GetRegions() } do
+		if region.IsObjectType and region:IsObjectType('Texture') then
+			region:SetTexture(nil)
+			region:SetAlpha(0)
+		end
+	end
+
+	if frame.NineSlice then
+		frame.NineSlice:SetAlpha(0)
+	end
+end
+
+local function SkinCharacterFrame()
+	local frame = _G.CharacterFrame
+	if not frame then return end
+
+	StripTextures(frame)
+	StripTextures(_G.CharacterFrameInset)
+	StripTextures(_G.CharacterFrameInsetRight)
+	StripTextures(_G.CharacterModelScene)
+	StripTextures(_G.PaperDollSidebarTabs)
+
+	if _G.CharacterFramePortrait then
+		_G.CharacterFramePortrait:SetAlpha(0)
+	end
+
+	local statsPane = _G.CharacterStatsPane
+	if statsPane then
+		StripTextures(statsPane)
+		if statsPane.ClassBackground then statsPane.ClassBackground:Hide() end
+		for _, key in next, { 'EnhancementsCategory', 'ItemLevelCategory', 'AttributesCategory' } do
+			StripTextures(statsPane[key])
+		end
+	end
+
+	-- solid dark ground behind the model (its backgrounds were stripped)
+	local modelOverlay = _G.CharacterModelFrameBackgroundOverlay
+	if modelOverlay then
+		modelOverlay:SetColorTexture(0.03, 0.03, 0.03)
+		modelOverlay:SetAlpha(1)
+	end
+
+	-- same backdrop the bag frame uses
+	local backdrop = CreateFrame('Frame', nil, frame, 'BackdropTemplate')
+	backdrop:SetAllPoints()
+	backdrop:SetFrameLevel(frame:GetFrameLevel())
+	backdrop:SetBackdrop({
+		bgFile = EDGE_TEXTURE,
+		edgeFile = EDGE_TEXTURE,
+		edgeSize = 1,
+	})
+	backdrop:SetBackdropColor(0.06, 0.06, 0.06, 0.94)
+	backdrop:SetBackdropBorderColor(0, 0, 0, 1)
+end
+
+--------------------------------------------------------------------------------
 -- Item level on gear slots
 --------------------------------------------------------------------------------
 
@@ -80,6 +144,8 @@ end
 --------------------------------------------------------------------------------
 
 function Character:OnInit()
+	SkinCharacterFrame()
+
 	if PaperDollItemSlotButton_Update then
 		hooksecurefunc('PaperDollItemSlotButton_Update', UpdateSlotItemLevel)
 	end
