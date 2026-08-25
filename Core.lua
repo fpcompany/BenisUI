@@ -6,6 +6,11 @@ _G.BenisUI = BenisUI
 
 BenisUI.modules = {}
 
+BenisUI.media = {
+	font = 'Interface\\AddOns\\BenisUI\\Media\\Expressway.ttf',
+	texture = 'Interface\\Buttons\\WHITE8X8',
+}
+
 function BenisUI:RegisterModule(name)
 	local module = {}
 	self.modules[name] = module
