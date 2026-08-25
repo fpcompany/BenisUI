@@ -89,33 +89,37 @@ local KEEP_TRACK_WORDS = { 'Hero', 'Myth' }
 local UPGRADE_LINE_TYPE = Enum.TooltipDataLineType and Enum.TooltipDataLineType.ItemUpgradeLevel
 local CRAFTED_LINE_TYPE = Enum.TooltipDataLineType and Enum.TooltipDataLineType.ProfessionCraftingQuality
 
-local function HasKeepworthyTrack(bagID, slotID)
+-- returns upgradeTrackText ("Upgrade Level: Hero 4/6" or nil), isCrafted
+local function ScanTooltip(bagID, slotID)
 	if not (UPGRADE_LINE_TYPE and C_TooltipInfo and C_TooltipInfo.GetBagItem) then
-		return true -- cannot tell; do not desaturate
+		return nil, false
 	end
 
+	local trackText, isCrafted
 	local data = C_TooltipInfo.GetBagItem(bagID, slotID)
 	local lines = data and data.lines
 	if lines then
 		for i = 1, #lines do
 			local line = lines[i]
 			if line.type == UPGRADE_LINE_TYPE then
-				local text = line.leftText
-				if text then
-					for _, word in ipairs(KEEP_TRACK_WORDS) do
-						if text:find(word, 1, true) then
-							return true
-						end
-					end
-				end
-				return false -- has a track, but a lower one
+				trackText = line.leftText
 			elseif line.type == CRAFTED_LINE_TYPE then
-				return true -- crafted gear (profession quality tier line)
+				isCrafted = true
 			end
 		end
 	end
 
-	return false -- no upgrade track at all (old expansion gear)
+	return trackText, isCrafted
+end
+
+local function HasKeepTrackWord(trackText)
+	if not trackText then return false end
+	for _, word in ipairs(KEEP_TRACK_WORDS) do
+		if trackText:find(word, 1, true) then
+			return true
+		end
+	end
+	return false
 end
 
 --------------------------------------------------------------------------------
@@ -267,13 +271,14 @@ function Bags:UpdateSlot(slot)
 
 	local isJunk = quality == Enum.ItemQuality.Poor
 
-	local itemLevel, isGear
+	local itemLevel, isGear, trackText, isCrafted
 	if hasItem and info.hyperlink then
 		itemLevel, isGear = GetSlotItemLevel(bagID, slotID, info.hyperlink)
+		trackText, isCrafted = ScanTooltip(bagID, slotID)
 	end
 
-	-- grey out junk and gear below the Hero/Myth upgrade tracks
-	local lowTrack = isGear and not HasKeepworthyTrack(bagID, slotID)
+	-- grey out junk and gear below the Hero/Myth upgrade tracks (crafted exempt)
+	local lowTrack = isGear and not (isCrafted or HasKeepTrackWord(trackText))
 	local desaturated = hasItem and (info.isLocked or isJunk or lowTrack)
 
 	SetItemButtonTexture(slot, icon)
@@ -337,6 +342,86 @@ function Bags:UpdateSlot(slot)
 	else
 		SetSlotBorder(slot, BORDER_THIN, EMPTY_R, EMPTY_G, EMPTY_B)
 		slot.itemLevel:SetText('')
+	end
+
+	-- search corpus: everything a query term can match against
+	if hasItem then
+		local parts = {}
+		parts[#parts + 1] = (info.itemName or ''):lower()
+		if trackText then parts[#parts + 1] = trackText:lower() end
+		if isCrafted then parts[#parts + 1] = 'crafted' end
+		if isJunk then parts[#parts + 1] = 'junk' end
+		if info.hasLoot then parts[#parts + 1] = 'openable' end
+		if special and IsItemKeystoneByID(info.itemID) then parts[#parts + 1] = 'keystone' end
+
+		local qualityName = quality and _G['ITEM_QUALITY' .. quality .. '_DESC']
+		if qualityName then parts[#parts + 1] = qualityName:lower() end
+
+		if isGear and info.hyperlink then
+			local stats = C_Item.GetItemStats(info.hyperlink)
+			if stats then
+				for statToken in pairs(stats) do
+					local label = _G[statToken] -- e.g. "Critical Strike"
+					if type(label) == 'string' then
+						parts[#parts + 1] = label:lower()
+					end
+				end
+			end
+		end
+
+		local setNames = Sets:GetSetNamesText(bagID, slotID)
+		if setNames then parts[#parts + 1] = setNames end
+
+		slot.searchText = table.concat(parts, ' ')
+		slot.searchItemLevel = itemLevel
+	else
+		slot.searchText = nil
+		slot.searchItemLevel = nil
+	end
+
+	self:ApplySearchToSlot(slot)
+end
+
+--------------------------------------------------------------------------------
+-- Search
+--------------------------------------------------------------------------------
+
+function Bags:SlotMatchesSearch(slot)
+	if not slot.searchText then return false end -- empty slots never match
+
+	for term in self.searchQuery:gmatch('%S+') do
+		local minLevel = tonumber(term)
+		if minLevel then
+			if (slot.searchItemLevel or 0) < minLevel then
+				return false
+			end
+		elseif not slot.searchText:find(term, 1, true) then
+			return false
+		end
+	end
+
+	return true
+end
+
+function Bags:ApplySearchToSlot(slot)
+	if not self.searchQuery or self.searchQuery == '' then
+		slot:SetAlpha(1)
+	else
+		slot:SetAlpha(self:SlotMatchesSearch(slot) and 1 or 0.15)
+	end
+end
+
+function Bags:ApplySearch()
+	for bagID = BACKPACK, NUM_BAGS do
+		local bagSlots = self.slots[bagID]
+		if bagSlots then
+			for slotID = 1, GetContainerNumSlots(bagID) do
+				local slot = bagSlots[slotID]
+				if slot and slot:IsShown() then
+					self:ApplySearchToSlot(slot)
+				end
+			end
+		end
 	end
 end
 
@@ -532,6 +617,16 @@ function Bags:CreateBagFrame()
 	sort:SetPoint('RIGHT', close, 'LEFT', -4, 0)
 	sort:SetText('Sort')
 	sort:SetScript('OnClick', function() C_Container.SortBags() end)
+
+	local search = CreateFrame('EditBox', 'BenisUI_BagSearchBox', header, 'SearchBoxTemplate')
+	search:SetSize(150, 20)
+	search:SetPoint('RIGHT', sort, 'LEFT', -10, 0)
+	search:SetAutoFocus(false)
+	search:HookScript('OnTextChanged', function(box)
+		self.searchQuery = strtrim(box:GetText() or ''):lower()
+		self:ApplySearch()
+	end)
+	self.searchBox = search
 
 	-- footer
 	self.freeText = frame:CreateFontString(nil, 'OVERLAY', 'GameFontNormalSmall')

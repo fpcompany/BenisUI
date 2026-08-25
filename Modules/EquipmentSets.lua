@@ -84,6 +84,25 @@ function Sets:GetHighlight(bagID, slotID)
 	return false
 end
 
+-- lowercased set names for the bag search corpus, or nil if not in any set
+function Sets:GetSetNamesText(bagID, slotID)
+	if self.dirty then
+		self:Rebuild()
+	end
+
+	local list = self.map[bagID] and self.map[bagID][slotID]
+	if not list then return nil end
+
+	local text = 'set'
+	for _, setID in ipairs(list) do
+		local name = C_EquipmentSet.GetEquipmentSetInfo(setID)
+		if name then
+			text = text .. ' ' .. name:lower()
+		end
+	end
+	return text
+end
+
 --------------------------------------------------------------------------------
 -- Equipment Manager row widgets
 --------------------------------------------------------------------------------
