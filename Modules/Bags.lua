@@ -629,6 +629,22 @@ function Bags:UpdateFooter(view)
 		local wbFree, wbTotal = CountFree(WARBAND_BANK_BAGS)
 		view.freeText:SetFormattedText('Bank %d/%d free  —  Warband %d/%d free',
 			bankFree, bankTotal, wbFree, wbTotal)
+
+		-- buy-next-tab button for the active bank
+		local section = view.config.sections[view.activeSection]
+		local canBuy = C_Bank and C_Bank.CanPurchaseBankTab
+			and C_Bank.CanPurchaseBankTab(section.bankType)
+		if canBuy then
+			local tabData = C_Bank.FetchNextPurchasableBankTabData(section.bankType)
+			if tabData then
+				view.buyTabButton:SetText(('Buy Tab: %s'):format(GetMoneyString(tabData.tabCost, true)))
+			else
+				view.buyTabButton:SetText('Buy Tab')
+			end
+			view.buyTabButton:Show()
+		else
+			view.buyTabButton:Hide()
+		end
 	else
 		local free, total = CountFree(HELD_BAGS)
 		view.freeText:SetFormattedText('%d/%d free', free, total)
@@ -839,7 +855,20 @@ function Bags:CreateView(config)
 	view.freeText = frame:CreateFontString(nil, 'OVERLAY', 'GameFontNormalSmall')
 	view.freeText:SetPoint('BOTTOMLEFT', FRAME_PADDING, FRAME_PADDING)
 
-	if not config.isBank then
+	if config.isBank then
+		-- purchases the next tab of whichever bank is active, through
+		-- Blizzard's own confirmation popup (it fetches cost and text itself)
+		local buy = CreateFrame('Button', nil, frame, 'UIPanelButtonTemplate')
+		buy:SetSize(140, 20)
+		buy:SetPoint('BOTTOMRIGHT', -FRAME_PADDING, FRAME_PADDING - 2)
+		buy:SetScript('OnClick', function()
+			local section = config.sections[view.activeSection]
+			PlaySound(SOUNDKIT.IG_MAINMENU_OPTION)
+			StaticPopup_Show('CONFIRM_BUY_BANK_TAB', nil, nil, { bankType = section.bankType })
+		end)
+		buy:Hide()
+		view.buyTabButton = buy
+	else
 		view.moneyText = frame:CreateFontString(nil, 'OVERLAY', 'GameFontNormalSmall')
 		view.moneyText:SetPoint('BOTTOMRIGHT', -FRAME_PADDING, FRAME_PADDING)
 	end
@@ -994,9 +1023,9 @@ function Bags:OnInit()
 	self.views = {}
 	self.viewByBagID = {}
 
-	-- migrate the pre-tabs default (24 columns for the old stacked layout)
-	if self.db.bankColumns == 24 then
-		self.db.bankColumns = 14
+	-- migrate earlier defaults (24: stacked layout, 14: first tabbed layout)
+	if self.db.bankColumns == 24 or self.db.bankColumns == 14 then
+		self.db.bankColumns = 21
 	end
 
 	self.inventory = self:CreateView({
@@ -1030,8 +1059,10 @@ function Bags:OnInit()
 		positionKey = 'bankPosition',
 		defaultPosition = { point = 'TOPLEFT', x = 50, y = -80 },
 		sections = {
-			{ label = 'Bank', tabName = 'Bank', bags = CHARACTER_BANK_BAGS },
-			{ label = 'Warband Bank', tabName = 'Warband', bags = WARBAND_BANK_BAGS },
+			{ label = 'Bank', tabName = 'Bank', bags = CHARACTER_BANK_BAGS,
+				bankType = Enum.BankType and Enum.BankType.Character or 0 },
+			{ label = 'Warband Bank', tabName = 'Warband', bags = WARBAND_BANK_BAGS,
+				bankType = Enum.BankType and Enum.BankType.Account or 2 },
 		},
 		sortFunc = function()
 			C_Container.SortBankBags()

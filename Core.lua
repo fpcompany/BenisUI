@@ -19,7 +19,7 @@ end
 local defaults = {
 	bags = {
 		columns = 12,
-		bankColumns = 14,
+		bankColumns = 21,
 		slotSize = 37,
 		bankSlotSize = 36,
 		spacing = 4,
