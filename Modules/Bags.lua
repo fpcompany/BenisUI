@@ -271,10 +271,11 @@ function Bags:UpdateSlot(slot)
 
 	-- grey out junk and gear below the Hero/Myth upgrade tracks
 	local lowTrack = isGear and not HasKeepworthyTrack(bagID, slotID)
+	local desaturated = hasItem and (info.isLocked or isJunk or lowTrack)
 
 	SetItemButtonTexture(slot, icon)
 	SetItemButtonCount(slot, info and info.stackCount or 0)
-	SetItemButtonDesaturated(slot, info and (info.isLocked or isJunk or lowTrack))
+	SetItemButtonDesaturated(slot, desaturated)
 
 	local special = hasItem and GetSpecialColor(info.itemID)
 	if special then
@@ -320,7 +321,13 @@ function Bags:UpdateSlot(slot)
 
 		if itemLevel then
 			slot.itemLevel:SetText(itemLevel)
-			slot.itemLevel:SetTextColor(r, g, b)
+			if desaturated then
+				-- match the greyed icon: quality color reduced to its luminance
+				local gray = 0.299 * r + 0.587 * g + 0.114 * b
+				slot.itemLevel:SetTextColor(gray, gray, gray)
+			else
+				slot.itemLevel:SetTextColor(r, g, b)
+			end
 		else
 			slot.itemLevel:SetText('')
 		end
