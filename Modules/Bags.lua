@@ -37,6 +37,34 @@ for bagID = BagIndex.AccountBankTab_1 or 12, BagIndex.AccountBankTab_5 or 16 do
 	WARBAND_BANK_BAGS[#WARBAND_BANK_BAGS + 1] = bagID
 end
 
+local ALL_BANK_BAGS = {}
+for _, list in next, { CHARACTER_BANK_BAGS, WARBAND_BANK_BAGS } do
+	for _, bagID in ipairs(list) do
+		ALL_BANK_BAGS[#ALL_BANK_BAGS + 1] = bagID
+	end
+end
+
+-- bank tabs whose deposit settings mark them as reagent tabs
+local REAGENT_FLAG = (Enum.BagSlotFlags and Enum.BagSlotFlags.ClassReagents) or 128
+local FetchPurchasedBankTabData = C_Bank and C_Bank.FetchPurchasedBankTabData
+
+local function GetReagentFlaggedBags()
+	local flagged = {}
+	if FetchPurchasedBankTabData and Enum.BankType then
+		for _, bankType in next, { Enum.BankType.Character, Enum.BankType.Account } do
+			local tabs = FetchPurchasedBankTabData(bankType)
+			if tabs then
+				for _, data in ipairs(tabs) do
+					if data.ID and bit.band(data.depositFlags or 0, REAGENT_FLAG) ~= 0 then
+						flagged[data.ID] = true
+					end
+				end
+			end
+		end
+	end
+	return flagged
+end
+
 local EDGE_TEXTURE = 'Interface\\Buttons\\WHITE8X8'
 local BORDER_THIN = 1
 local BORDER_THICK = BORDER_THIN * 5 -- equipment set items
@@ -630,9 +658,9 @@ function Bags:UpdateFooter(view)
 		view.freeText:SetFormattedText('Bank %d/%d free  —  Warband %d/%d free',
 			bankFree, bankTotal, wbFree, wbTotal)
 
-		-- buy-next-tab button for the active bank
+		-- buy-next-tab button for the active bank (the Reagents tab has none)
 		local section = view.config.sections[view.activeSection]
-		local canBuy = C_Bank and C_Bank.CanPurchaseBankTab
+		local canBuy = section.bankType and C_Bank and C_Bank.CanPurchaseBankTab
 			and C_Bank.CanPurchaseBankTab(section.bankType)
 		if canBuy then
 			local tabData = C_Bank.FetchNextPurchasableBankTabData(section.bankType)
@@ -666,19 +694,37 @@ function Bags:Layout(view)
 	local col, row = 0, 0
 	local yOffset = 0 -- accumulated section label space
 
+	-- resolve which bags each section actually owns right now (reagent-flagged
+	-- bank tabs move from the Bank/Warband sections into the Reagents section)
+	local reagentBags = view.config.isBank and GetReagentFlaggedBags() or nil
+	local effectiveBags = {}
 	for index, section in ipairs(view.config.sections) do
+		local list = {}
+		for _, bagID in ipairs(section.bags) do
+			local isReagentTab = reagentBags and reagentBags[bagID]
+			if section.onlyReagents then
+				if isReagentTab then list[#list + 1] = bagID end
+			elseif not (section.excludeReagents and isReagentTab) then
+				list[#list + 1] = bagID
+			end
+		end
+		effectiveBags[index] = list
+	end
+
+	for index, section in ipairs(view.config.sections) do
+		local sectionBags = effectiveBags[index]
 		-- with tabs, only the active section is laid out
 		local isActive = not view.config.tabbed or index == view.activeSection
 
 		local numSectionSlots = 0
-		for _, bagID in ipairs(section.bags) do
+		for _, bagID in ipairs(sectionBags) do
 			numSectionSlots = numSectionSlots + GetContainerNumSlots(bagID)
 		end
 
 		local label = view.sectionLabels[index]
 		if not isActive or numSectionSlots == 0 then
 			if label then label:Hide() end
-			for _, bagID in ipairs(section.bags) do
+			for _, bagID in ipairs(sectionBags) do
 				local bagSlots = view.slots[bagID]
 				for slotID = 1, #bagSlots do
 					bagSlots[slotID]:Hide()
@@ -699,7 +745,7 @@ function Bags:Layout(view)
 				yOffset = yOffset + SECTION_GAP + label:GetStringHeight() + 4
 			end
 
-			for _, bagID in ipairs(section.bags) do
+			for _, bagID in ipairs(sectionBags) do
 				local numSlots = GetContainerNumSlots(bagID)
 				local bagSlots = view.slots[bagID]
 
@@ -892,9 +938,10 @@ function Bags:CreateView(config)
 	end
 	for _, section in ipairs(config.sections) do
 		for _, bagID in ipairs(section.bags) do
-			view.slots[bagID] = {}
+			-- sections may share bags (reagent-flagged tabs); never reset
+			view.slots[bagID] = view.slots[bagID] or {}
 			self.viewByBagID[bagID] = view
-			if view.bagHolders then
+			if view.bagHolders and not view.bagHolders[bagID] then
 				local holder = CreateFrame('Frame', nil, frame)
 				holder:SetID(bagID)
 				holder:SetAllPoints()
@@ -1060,9 +1107,13 @@ function Bags:OnInit()
 		defaultPosition = { point = 'TOPLEFT', x = 50, y = -80 },
 		sections = {
 			{ label = 'Bank', tabName = 'Bank', bags = CHARACTER_BANK_BAGS,
+				excludeReagents = true,
 				bankType = Enum.BankType and Enum.BankType.Character or 0 },
 			{ label = 'Warband Bank', tabName = 'Warband', bags = WARBAND_BANK_BAGS,
+				excludeReagents = true,
 				bankType = Enum.BankType and Enum.BankType.Account or 2 },
+			{ label = 'Reagents', tabName = 'Reagents', bags = ALL_BANK_BAGS,
+				onlyReagents = true },
 		},
 		sortFunc = function()
 			C_Container.SortBankBags()
