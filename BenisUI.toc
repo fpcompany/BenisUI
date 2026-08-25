@@ -1,0 +1,13 @@
+## Interface: 120100
+## Title: |cff1784d1Benis|rUI
+## Notes: Full UI replacement. Currently replaces the inventory with a combined bag frame.
+## Author: Benis
+## Version: 0.1.0
+## SavedVariables: BenisUIDB
+## SavedVariablesPerCharacter: BenisUICharDB
+## Category-enUS: UI Overhaul
+## X-Website: https://github.com/benis/BenisUI
+
+Core.lua
+Modules\EquipmentSets.lua
+Modules\Bags.lua
