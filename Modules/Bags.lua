@@ -63,6 +63,7 @@ local ITEMLEVEL_EXCLUDED_EQUIP_LOCS = {
 	INVTYPE_TABARD = true,
 }
 
+-- returns itemLevel (or nil), isGear
 local function GetSlotItemLevel(bagID, slotID, hyperlink)
 	local _, _, _, equipLoc, _, classID = GetItemInfoInstant(hyperlink)
 
@@ -70,15 +71,48 @@ local function GetSlotItemLevel(bagID, slotID, hyperlink)
 		and not ITEMLEVEL_EXCLUDED_EQUIP_LOCS[equipLoc]
 	local isProfessionTool = classID == Enum.ItemClass.Profession
 
-	if not (isGear or isProfessionTool) then return end
+	if not (isGear or isProfessionTool) then return nil, false end
 
 	local location = ItemLocation:CreateFromBagAndSlot(bagID, slotID)
 	if DoesItemExist(location) then
 		local itemLevel = GetCurrentItemLevel(location)
 		if itemLevel and itemLevel > 1 then
-			return itemLevel
+			return itemLevel, isGear
 		end
 	end
+
+	return nil, isGear
+end
+
+-- upgrade tracks that keep gear saturated; extend for non-English clients
+local KEEP_TRACK_WORDS = { 'Hero', 'Myth' }
+local UPGRADE_LINE_TYPE = Enum.TooltipDataLineType and Enum.TooltipDataLineType.ItemUpgradeLevel
+
+local function HasKeepworthyTrack(bagID, slotID)
+	if not (UPGRADE_LINE_TYPE and C_TooltipInfo and C_TooltipInfo.GetBagItem) then
+		return true -- cannot tell; do not desaturate
+	end
+
+	local data = C_TooltipInfo.GetBagItem(bagID, slotID)
+	local lines = data and data.lines
+	if lines then
+		for i = 1, #lines do
+			local line = lines[i]
+			if line.type == UPGRADE_LINE_TYPE then
+				local text = line.leftText
+				if text then
+					for _, word in ipairs(KEEP_TRACK_WORDS) do
+						if text:find(word, 1, true) then
+							return true
+						end
+					end
+				end
+				return false -- has a track, but a lower one
+			end
+		end
+	end
+
+	return false -- no upgrade track at all (old/crafted gear)
 end
 
 --------------------------------------------------------------------------------
@@ -204,6 +238,14 @@ function Bags:CreateSlot(bagID, slotID)
 	glintAlpha:SetDuration(0.8)
 	glint.pulse = glintPulse
 
+	-- marching ants ring for special items (sprite sheet, see AntsDriver)
+	local ants = slot.qualityBorder:CreateTexture(nil, 'OVERLAY', nil, 2)
+	ants:SetTexture('Interface\\SpellActivationOverlay\\IconAlertAnts')
+	ants:SetPoint('CENTER')
+	ants:SetSize(self.db.slotSize + 6, self.db.slotSize + 6)
+	ants:Hide()
+	slot.ants = ants
+
 	-- template decorations we do not drive
 	if slot.NewItemTexture then slot.NewItemTexture:Hide() end
 	if slot.BattlepayItemTexture then slot.BattlepayItemTexture:Hide() end
@@ -222,9 +264,17 @@ function Bags:UpdateSlot(slot)
 
 	local isJunk = quality == Enum.ItemQuality.Poor
 
+	local itemLevel, isGear
+	if hasItem and info.hyperlink then
+		itemLevel, isGear = GetSlotItemLevel(bagID, slotID, info.hyperlink)
+	end
+
+	-- grey out junk and gear below the Hero/Myth upgrade tracks
+	local lowTrack = isGear and not HasKeepworthyTrack(bagID, slotID)
+
 	SetItemButtonTexture(slot, icon)
 	SetItemButtonCount(slot, info and info.stackCount or 0)
-	SetItemButtonDesaturated(slot, info and (info.isLocked or isJunk))
+	SetItemButtonDesaturated(slot, info and (info.isLocked or isJunk or lowTrack))
 
 	local special = hasItem and GetSpecialColor(info.itemID)
 	if special then
@@ -234,10 +284,14 @@ function Bags:UpdateSlot(slot)
 			slot.specialGlint.spin:Play()
 			slot.specialGlint.pulse:Play()
 		end
+		slot.ants:Show()
+		self.activeAnts[slot.ants] = true
 	else
 		slot.specialGlint.spin:Stop()
 		slot.specialGlint.pulse:Stop()
 		slot.specialGlint:Hide()
+		slot.ants:Hide()
+		self.activeAnts[slot.ants] = nil
 	end
 
 	local openable = hasItem and info.hasLoot and not info.isLocked and not special
@@ -264,7 +318,6 @@ function Bags:UpdateSlot(slot)
 			SetSlotBorder(slot, BORDER_THIN, r, g, b)
 		end
 
-		local itemLevel = info.hyperlink and GetSlotItemLevel(bagID, slotID, info.hyperlink)
 		if itemLevel then
 			slot.itemLevel:SetText(itemLevel)
 			slot.itemLevel:SetTextColor(r, g, b)
@@ -479,6 +532,19 @@ function Bags:CreateBagFrame()
 
 	self.reagentLabel = frame:CreateFontString(nil, 'OVERLAY', 'GameFontNormalSmall')
 	self.reagentLabel:SetText('Reagents')
+
+	-- drives the marching ants sprite sheet; parented to the bag frame so it
+	-- only runs while the bags are open
+	self.activeAnts = {}
+	local antsDriver = CreateFrame('Frame', nil, frame)
+	local AnimateTexCoords = TextureUtil and TextureUtil.AnimateTexCoords
+	if AnimateTexCoords then
+		antsDriver:SetScript('OnUpdate', function(_, elapsed)
+			for texture in pairs(self.activeAnts) do
+				AnimateTexCoords(texture, 256, 256, 48, 48, 22, elapsed, 0.01)
+			end
+		end)
+	end
 
 	-- one holder per bag: the container item button mixin reads the bag ID
 	-- from its parent's frame ID
