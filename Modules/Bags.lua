@@ -87,6 +87,7 @@ end
 -- upgrade tracks that keep gear saturated; extend for non-English clients
 local KEEP_TRACK_WORDS = { 'Hero', 'Myth' }
 local UPGRADE_LINE_TYPE = Enum.TooltipDataLineType and Enum.TooltipDataLineType.ItemUpgradeLevel
+local CRAFTED_LINE_TYPE = Enum.TooltipDataLineType and Enum.TooltipDataLineType.ProfessionCraftingQuality
 
 local function HasKeepworthyTrack(bagID, slotID)
 	if not (UPGRADE_LINE_TYPE and C_TooltipInfo and C_TooltipInfo.GetBagItem) then
@@ -108,11 +109,13 @@ local function HasKeepworthyTrack(bagID, slotID)
 					end
 				end
 				return false -- has a track, but a lower one
+			elseif line.type == CRAFTED_LINE_TYPE then
+				return true -- crafted gear (profession quality tier line)
 			end
 		end
 	end
 
-	return false -- no upgrade track at all (old/crafted gear)
+	return false -- no upgrade track at all (old expansion gear)
 end
 
 --------------------------------------------------------------------------------
