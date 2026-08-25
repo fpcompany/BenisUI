@@ -17,3 +17,4 @@ Modules\ActionBars.lua
 Modules\Minimap.lua
 Modules\QuestTracker.lua
 Modules\BottomPanel.lua
+Modules\Tooltips.lua
