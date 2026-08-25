@@ -19,9 +19,11 @@ end
 local defaults = {
 	bags = {
 		columns = 12,
+		bankColumns = 24,
 		slotSize = 37,
 		spacing = 4,
 		position = nil, -- { point = 'BOTTOMRIGHT', x = -50, y = 120 }
+		bankPosition = nil,
 	},
 }
 
