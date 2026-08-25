@@ -26,6 +26,9 @@ local defaults = {
 		position = nil, -- { point = 'BOTTOMRIGHT', x = -50, y = 120 }
 		bankPosition = nil,
 	},
+	unitframes = {
+		positions = {}, -- [unit] = { point, x, y }
+	},
 }
 
 -- per-character settings (equipment set IDs are per-character)
