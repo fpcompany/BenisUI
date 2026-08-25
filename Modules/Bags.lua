@@ -267,6 +267,7 @@ function Bags:CreateSlot(view, bagID, slotID)
 		slot.bankTabID = bagID
 		slot.containerSlotID = slotID
 		slot.itemLocation = ItemLocation:CreateFromBagAndSlot(bagID, slotID)
+		if slot.Background then slot.Background:Hide() end -- template slot art
 	else
 		-- ContainerFrameItemButtonMixin resolves its bag from the parent's
 		-- frame ID, so tooltips, clicks, drag, splitting and selling all work
@@ -279,7 +280,7 @@ function Bags:CreateSlot(view, bagID, slotID)
 	slot.BagID = bagID -- our bookkeeping; never write slot.bagID (taint)
 	slot.SlotID = slotID
 
-	local size = self.db.slotSize
+	local size = view.config.slotSize
 	slot:SetSize(size, size)
 
 	if slot.ClearNormalTexture then
@@ -641,7 +642,8 @@ end
 
 function Bags:Layout(view)
 	local db = self.db
-	local step = db.slotSize + db.spacing
+	local slotSize = view.config.slotSize
+	local step = slotSize + db.spacing
 	local columns = view.config.columns
 	local originY = HEADER_HEIGHT + FRAME_PADDING
 
@@ -649,16 +651,26 @@ function Bags:Layout(view)
 	local yOffset = 0 -- accumulated section label space
 
 	for index, section in ipairs(view.config.sections) do
+		-- with tabs, only the active section is laid out
+		local isActive = not view.config.tabbed or index == view.activeSection
+
 		local numSectionSlots = 0
 		for _, bagID in ipairs(section.bags) do
 			numSectionSlots = numSectionSlots + GetContainerNumSlots(bagID)
 		end
 
 		local label = view.sectionLabels[index]
-		if numSectionSlots == 0 then
+		if not isActive or numSectionSlots == 0 then
 			if label then label:Hide() end
+			for _, bagID in ipairs(section.bags) do
+				local bagSlots = view.slots[bagID]
+				for slotID = 1, #bagSlots do
+					bagSlots[slotID]:Hide()
+				end
+			end
 		else
-			if section.label then
+			-- tabs already name the section; a label would be redundant
+			if section.label and not view.config.tabbed then
 				if not label then
 					label = view.frame:CreateFontString(nil, 'OVERLAY', 'GameFontNormalSmall')
 					label:SetText(section.label)
@@ -682,7 +694,7 @@ function Bags:Layout(view)
 					slot:SetPoint('TOPLEFT', view.frame, 'TOPLEFT',
 						FRAME_PADDING + col * step,
 						-(originY + row * step + yOffset))
-					slot:SetSize(db.slotSize, db.slotSize)
+					slot:SetSize(slotSize, slotSize)
 					slot:Show()
 
 					col = col + 1
@@ -690,19 +702,13 @@ function Bags:Layout(view)
 						col, row = 0, row + 1
 					end
 				end
+				for slotID = numSlots + 1, #bagSlots do
+					bagSlots[slotID]:Hide()
+				end
 			end
 
 			if col > 0 then
 				col, row = 0, row + 1
-			end
-		end
-
-		-- hide slots beyond each bag's current size (or entire unpurchased bags)
-		for _, bagID in ipairs(section.bags) do
-			local numSlots = GetContainerNumSlots(bagID)
-			local bagSlots = view.slots[bagID]
-			for slotID = numSlots + 1, #bagSlots do
-				bagSlots[slotID]:Hide()
 			end
 		end
 	end
@@ -715,6 +721,18 @@ end
 --------------------------------------------------------------------------------
 -- View frames
 --------------------------------------------------------------------------------
+
+function Bags:UpdateTabs(view)
+	for index, tab in ipairs(view.tabs) do
+		local active = index == view.activeSection
+		tab:SetBackdropColor(active and 0.18 or 0.09, active and 0.18 or 0.09, active and 0.18 or 0.09, 1)
+		if active then
+			tab.text:SetTextColor(1, 0.82, 0.2)
+		else
+			tab.text:SetTextColor(0.6, 0.6, 0.6)
+		end
+	end
+end
 
 function Bags:CreateView(config)
 	local db = self.db
@@ -769,6 +787,33 @@ function Bags:CreateView(config)
 	local title = header:CreateFontString(nil, 'OVERLAY', 'GameFontNormal')
 	title:SetPoint('LEFT', FRAME_PADDING, 0)
 	title:SetText(config.title)
+
+	if config.tabbed then
+		view.activeSection = 1
+		view.tabs = {}
+		for index, section in ipairs(config.sections) do
+			local tab = CreateFrame('Button', nil, header, 'BackdropTemplate')
+			tab:SetSize(74, 20)
+			if index == 1 then
+				tab:SetPoint('LEFT', title, 'RIGHT', 12, 0)
+			else
+				tab:SetPoint('LEFT', view.tabs[index - 1], 'RIGHT', 4, 0)
+			end
+			tab:SetBackdrop({ bgFile = EDGE_TEXTURE, edgeFile = EDGE_TEXTURE, edgeSize = 1 })
+			tab:SetBackdropBorderColor(0, 0, 0, 1)
+			tab.text = tab:CreateFontString(nil, 'OVERLAY', 'GameFontNormalSmall')
+			tab.text:SetPoint('CENTER')
+			tab.text:SetText(section.tabName or section.label)
+			tab:SetScript('OnClick', function()
+				view.activeSection = index
+				self:UpdateTabs(view)
+				self:Layout(view)
+				self:UpdateAll(view)
+			end)
+			view.tabs[index] = tab
+		end
+		self:UpdateTabs(view)
+	end
 
 	local close = CreateFrame('Button', nil, header, 'UIPanelCloseButton')
 	close:SetPoint('RIGHT', -2, 0)
@@ -949,11 +994,17 @@ function Bags:OnInit()
 	self.views = {}
 	self.viewByBagID = {}
 
+	-- migrate the pre-tabs default (24 columns for the old stacked layout)
+	if self.db.bankColumns == 24 then
+		self.db.bankColumns = 14
+	end
+
 	self.inventory = self:CreateView({
 		frameName = 'BenisUI_BagFrame',
 		title = '|cff1784d1Benis|rUI Inventory',
 		isBank = false,
 		columns = self.db.columns,
+		slotSize = self.db.slotSize,
 		positionKey = 'position',
 		defaultPosition = { point = 'BOTTOMRIGHT', x = -50, y = 120 },
 		sections = {
@@ -971,14 +1022,16 @@ function Bags:OnInit()
 
 	self.bank = self:CreateView({
 		frameName = 'BenisUI_BankFrame',
-		title = '|cff1784d1Benis|rUI Bank',
+		title = '|cff1784d1Benis|rUI',
 		isBank = true,
+		tabbed = true,
 		columns = self.db.bankColumns,
+		slotSize = self.db.bankSlotSize,
 		positionKey = 'bankPosition',
 		defaultPosition = { point = 'TOPLEFT', x = 50, y = -80 },
 		sections = {
-			{ label = 'Bank', bags = CHARACTER_BANK_BAGS },
-			{ label = 'Warband Bank', bags = WARBAND_BANK_BAGS },
+			{ label = 'Bank', tabName = 'Bank', bags = CHARACTER_BANK_BAGS },
+			{ label = 'Warband Bank', tabName = 'Warband', bags = WARBAND_BANK_BAGS },
 		},
 		sortFunc = function()
 			C_Container.SortBankBags()
