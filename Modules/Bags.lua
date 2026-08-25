@@ -63,7 +63,7 @@ local ITEMLEVEL_EXCLUDED_EQUIP_LOCS = {
 	INVTYPE_TABARD = true,
 }
 
--- returns itemLevel (or nil), isGear
+-- returns itemLevel (or nil), isGear, equipLoc
 local function GetSlotItemLevel(bagID, slotID, hyperlink)
 	local _, _, _, equipLoc, _, classID = GetItemInfoInstant(hyperlink)
 
@@ -71,18 +71,30 @@ local function GetSlotItemLevel(bagID, slotID, hyperlink)
 		and not ITEMLEVEL_EXCLUDED_EQUIP_LOCS[equipLoc]
 	local isProfessionTool = classID == Enum.ItemClass.Profession
 
-	if not (isGear or isProfessionTool) then return nil, false end
+	if not (isGear or isProfessionTool) then return nil, false, equipLoc end
 
 	local location = ItemLocation:CreateFromBagAndSlot(bagID, slotID)
 	if DoesItemExist(location) then
 		local itemLevel = GetCurrentItemLevel(location)
 		if itemLevel and itemLevel > 1 then
-			return itemLevel, isGear
+			return itemLevel, isGear, equipLoc
 		end
 	end
 
-	return nil, isGear
+	return nil, isGear, equipLoc
 end
+
+-- extra search words per equip location, on top of the localized slot name
+local EQUIP_LOC_EXTRA_WORDS = {
+	INVTYPE_FINGER = 'ring',
+	INVTYPE_WAIST = 'belt',
+	INVTYPE_FEET = 'boots',
+	INVTYPE_HAND = 'gloves',
+	INVTYPE_WRIST = 'bracers',
+	INVTYPE_CLOAK = 'cloak',
+	INVTYPE_HEAD = 'helm',
+	INVTYPE_SHOULDER = 'shoulders',
+}
 
 -- upgrade tracks that keep gear saturated; extend for non-English clients
 local KEEP_TRACK_WORDS = { 'Hero', 'Myth' }
@@ -272,9 +284,9 @@ function Bags:UpdateSlot(slot)
 
 	local isJunk = quality == Enum.ItemQuality.Poor
 
-	local itemLevel, isGear, trackText, isCrafted
+	local itemLevel, isGear, equipLoc, trackText, isCrafted
 	if hasItem and info.hyperlink then
-		itemLevel, isGear = GetSlotItemLevel(bagID, slotID, info.hyperlink)
+		itemLevel, isGear, equipLoc = GetSlotItemLevel(bagID, slotID, info.hyperlink)
 		trackText, isCrafted = ScanTooltip(bagID, slotID)
 	end
 
@@ -353,6 +365,13 @@ function Bags:UpdateSlot(slot)
 
 		local qualityName = quality and _G['ITEM_QUALITY' .. quality .. '_DESC']
 		if qualityName then parts[#parts + 1] = qualityName:lower() end
+
+		if equipLoc and equipLoc ~= '' then
+			local slotName = _G[equipLoc] -- e.g. INVTYPE_FINGER -> "Finger"
+			if type(slotName) == 'string' then parts[#parts + 1] = slotName:lower() end
+			local extra = EQUIP_LOC_EXTRA_WORDS[equipLoc]
+			if extra then parts[#parts + 1] = extra end
+		end
 
 		if isGear and info.hyperlink then
 			local stats = C_Item.GetItemStats(info.hyperlink)
