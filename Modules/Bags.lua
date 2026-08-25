@@ -8,7 +8,9 @@ local GetContainerNumSlots = C_Container.GetContainerNumSlots
 local GetContainerNumFreeSlots = C_Container.GetContainerNumFreeSlots
 local GetContainerItemInfo = C_Container.GetContainerItemInfo
 local GetItemInfoInstant = C_Item.GetItemInfoInstant
+local GetItemInfo = C_Item.GetItemInfo
 local IsItemKeystoneByID = C_Item.IsItemKeystoneByID
+local IsBoundToAccountUntilEquip = C_Item.IsBoundToAccountUntilEquip
 local GetCurrentItemLevel = C_Item.GetCurrentItemLevel
 local DoesItemExist = C_Item.DoesItemExist
 
@@ -413,6 +415,20 @@ function Bags:UpdateSlot(slot)
 		if isCrafted then parts[#parts + 1] = 'crafted' end
 		if isJunk then parts[#parts + 1] = 'junk' end
 		if info.hasLoot then parts[#parts + 1] = 'openable' end
+
+		-- unbound bind-on-equip: "warband" if it warbinds until equipped, else "boe"
+		if not info.isBound and info.hyperlink then
+			local bindType = select(14, GetItemInfo(info.hyperlink))
+			if bindType == Enum.ItemBind.OnEquip then
+				local location = ItemLocation:CreateFromBagAndSlot(bagID, slotID)
+				if IsBoundToAccountUntilEquip and DoesItemExist(location)
+					and IsBoundToAccountUntilEquip(location) then
+					parts[#parts + 1] = 'warband'
+				else
+					parts[#parts + 1] = 'boe'
+				end
+			end
+		end
 		if special and IsItemKeystoneByID(info.itemID) then parts[#parts + 1] = 'keystone' end
 
 		local qualityName = quality and _G['ITEM_QUALITY' .. quality .. '_DESC']
