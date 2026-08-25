@@ -11,3 +11,4 @@
 Core.lua
 Modules\EquipmentSets.lua
 Modules\Bags.lua
+Modules\Character.lua
