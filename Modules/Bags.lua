@@ -169,6 +169,7 @@ local function SetSlotBorder(slot, size, r, g, b)
 		border:SetPoint('BOTTOMRIGHT', slot, 'BOTTOMRIGHT', size, -size)
 	end
 
+	border.r, border.g, border.b = r, g, b
 	border:SetBackdropBorderColor(r, g, b, 1)
 end
 
@@ -283,7 +284,7 @@ function Bags:UpdateSlot(slot)
 
 	SetItemButtonTexture(slot, icon)
 	SetItemButtonCount(slot, info and info.stackCount or 0)
-	SetItemButtonDesaturated(slot, desaturated)
+	slot.desaturated = desaturated -- applied in ApplySearchToSlot
 
 	local special = hasItem and GetSpecialColor(info.itemID)
 	if special then
@@ -329,19 +330,15 @@ function Bags:UpdateSlot(slot)
 
 		if itemLevel then
 			slot.itemLevel:SetText(itemLevel)
-			if desaturated then
-				-- match the greyed icon: quality color reduced to its luminance
-				local gray = 0.299 * r + 0.587 * g + 0.114 * b
-				slot.itemLevel:SetTextColor(gray, gray, gray)
-			else
-				slot.itemLevel:SetTextColor(r, g, b)
-			end
+			slot.ilvlR, slot.ilvlG, slot.ilvlB = r, g, b
 		else
 			slot.itemLevel:SetText('')
+			slot.ilvlR = nil
 		end
 	else
 		SetSlotBorder(slot, BORDER_THIN, EMPTY_R, EMPTY_G, EMPTY_B)
 		slot.itemLevel:SetText('')
+		slot.ilvlR = nil
 	end
 
 	-- search corpus: everything a query term can match against
@@ -404,10 +401,29 @@ function Bags:SlotMatchesSearch(slot)
 end
 
 function Bags:ApplySearchToSlot(slot)
-	if not self.searchQuery or self.searchQuery == '' then
-		slot:SetAlpha(1)
-	else
-		slot:SetAlpha(self:SlotMatchesSearch(slot) and 1 or 0.15)
+	local searching = self.searchQuery and self.searchQuery ~= ''
+	local matches = not searching or self:SlotMatchesSearch(slot)
+
+	slot:SetAlpha((searching and not matches) and 0.15 or 1)
+
+	-- while searching, found items lose their desaturation
+	local desaturated = slot.desaturated and not (searching and matches)
+	SetItemButtonDesaturated(slot, desaturated)
+
+	-- while searching, no slot shows a border
+	local border = slot.qualityBorder
+	if border.r then
+		border:SetBackdropBorderColor(border.r, border.g, border.b, searching and 0 or 1)
+	end
+
+	if slot.ilvlR then
+		if desaturated then
+			-- match the greyed icon: quality color reduced to its luminance
+			local gray = 0.299 * slot.ilvlR + 0.587 * slot.ilvlG + 0.114 * slot.ilvlB
+			slot.itemLevel:SetTextColor(gray, gray, gray)
+		else
+			slot.itemLevel:SetTextColor(slot.ilvlR, slot.ilvlG, slot.ilvlB)
+		end
 	end
 end
 
