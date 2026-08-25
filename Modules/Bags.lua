@@ -8,6 +8,7 @@ local GetContainerNumSlots = C_Container.GetContainerNumSlots
 local GetContainerNumFreeSlots = C_Container.GetContainerNumFreeSlots
 local GetContainerItemInfo = C_Container.GetContainerItemInfo
 local GetItemInfoInstant = C_Item.GetItemInfoInstant
+local IsItemKeystoneByID = C_Item.IsItemKeystoneByID
 local GetCurrentItemLevel = C_Item.GetCurrentItemLevel
 local DoesItemExist = C_Item.DoesItemExist
 
@@ -24,6 +25,20 @@ local FOOTER_HEIGHT = 26
 local SECTION_GAP = 14 -- extra gap above the reagent section
 
 local EMPTY_R, EMPTY_G, EMPTY_B = 0.22, 0.22, 0.22
+
+-- items that get the animated sparkle overlay, with their tint
+local SPECIAL_ITEMS = {
+	[265714] = { r = 1, g = 0.55, b = 0.1 }, -- Trovehunter's Bounty (treasure trove map)
+}
+local KEYSTONE_COLOR = { r = 0.5, g = 0.65, b = 1 } -- arcane blue
+
+local function GetSpecialColor(itemID)
+	local color = SPECIAL_ITEMS[itemID]
+	if color then return color end
+	if itemID and IsItemKeystoneByID(itemID) then
+		return KEYSTONE_COLOR
+	end
+end
 
 local function GetQualityColor(quality)
 	if ColorManager and ColorManager.GetColorDataForItemQuality then
@@ -165,6 +180,30 @@ function Bags:CreateSlot(bagID, slotID)
 	alpha:SetDuration(0.6)
 	slot.openableGlow.pulse = pulse
 
+	-- rotating glint + pulse for special items (keystone, trove maps)
+	local glint = slot.qualityBorder:CreateTexture(nil, 'OVERLAY', nil, 1)
+	glint:SetAtlas('bags-glow-flash')
+	glint:SetPoint('CENTER')
+	glint:SetSize(self.db.slotSize * 1.3, self.db.slotSize * 1.3)
+	glint:SetBlendMode('ADD')
+	glint:Hide()
+	slot.specialGlint = glint
+
+	local spin = glint:CreateAnimationGroup()
+	spin:SetLooping('REPEAT')
+	local rotation = spin:CreateAnimation('Rotation')
+	rotation:SetDegrees(-360)
+	rotation:SetDuration(4)
+	glint.spin = spin
+
+	local glintPulse = glint:CreateAnimationGroup()
+	glintPulse:SetLooping('BOUNCE')
+	local glintAlpha = glintPulse:CreateAnimation('Alpha')
+	glintAlpha:SetFromAlpha(0.35)
+	glintAlpha:SetToAlpha(1)
+	glintAlpha:SetDuration(0.8)
+	glint.pulse = glintPulse
+
 	-- template decorations we do not drive
 	if slot.NewItemTexture then slot.NewItemTexture:Hide() end
 	if slot.BattlepayItemTexture then slot.BattlepayItemTexture:Hide() end
@@ -187,7 +226,21 @@ function Bags:UpdateSlot(slot)
 	SetItemButtonCount(slot, info and info.stackCount or 0)
 	SetItemButtonDesaturated(slot, info and (info.isLocked or isJunk))
 
-	local openable = hasItem and info.hasLoot and not info.isLocked
+	local special = hasItem and GetSpecialColor(info.itemID)
+	if special then
+		slot.specialGlint:SetVertexColor(special.r, special.g, special.b)
+		slot.specialGlint:Show()
+		if not slot.specialGlint.spin:IsPlaying() then
+			slot.specialGlint.spin:Play()
+			slot.specialGlint.pulse:Play()
+		end
+	else
+		slot.specialGlint.spin:Stop()
+		slot.specialGlint.pulse:Stop()
+		slot.specialGlint:Hide()
+	end
+
+	local openable = hasItem and info.hasLoot and not info.isLocked and not special
 	if openable then
 		slot.openableGlow:Show()
 		if not slot.openableGlow.pulse:IsPlaying() then
