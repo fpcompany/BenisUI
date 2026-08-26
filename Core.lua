@@ -34,6 +34,9 @@ local defaults = {
 	unitframes = {
 		positions = {}, -- [unit] = { point, x, y }
 	},
+	consumables = {
+		position = nil, -- { point = 'BOTTOMRIGHT', x, y }
+	},
 }
 
 -- per-character settings (equipment set IDs are per-character)
