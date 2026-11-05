@@ -450,21 +450,72 @@ function Chat:OnInit()
 	-- show. Fit it to what's actually drawn: the tab row, the panel's bleed
 	-- and the input box underneath. Edit Mode snaps by this box, so docking
 	-- the chat to a screen edge now puts the panel itself against it.
-	local selection = _G.DEFAULT_CHAT_FRAME and _G.DEFAULT_CHAT_FRAME.Selection
+	--
+	-- The same box sets the screen clamp (UpdateClampOffsets measures it), so
+	-- it has to be refit whenever Edit Mode re-measures. Left on Blizzard's
+	-- -32px margin, a chat placed against the left edge gets clamped ~28px
+	-- to the right on every load.
+	local chatFrame = _G.DEFAULT_CHAT_FRAME
+	local selection = chatFrame and chatFrame.Selection
 	if selection then
-		selection:ClearAllPoints()
-		selection:SetPoint('TOPLEFT', _G.DEFAULT_CHAT_FRAME, 'TOPLEFT', -4, 24)
-		selection:SetPoint('BOTTOMRIGHT', _G.DEFAULT_CHAT_FRAME, 'BOTTOMRIGHT', 4, -(6 + EDITBOX_HEIGHT))
+		local function FitSelection()
+			selection:ClearAllPoints()
+			selection:SetPoint('TOPLEFT', chatFrame, 'TOPLEFT', -4, 24)
+			selection:SetPoint('BOTTOMRIGHT', chatFrame, 'BOTTOMRIGHT', 4, -(6 + EDITBOX_HEIGHT))
+			if chatFrame:GetLeft() then
+				chatFrame:SetClampRectInsets(-4, 4, 24, -(6 + EDITBOX_HEIGHT))
+			end
+		end
+		FitSelection()
+		if chatFrame.AnchorSelectionFrame then
+			hooksecurefunc(chatFrame, 'AnchorSelectionFrame', FitSelection)
+		end
+		if chatFrame.UpdateClampOffsets then
+			hooksecurefunc(chatFrame, 'UpdateClampOffsets', FitSelection)
+		end
 	end
 
 	-- Edit Mode owns the main window's size and reapplies its own on layout
 	-- updates; put ours back afterwards. Resizing in Edit Mode itself wins:
 	-- whatever size the window has on leaving Edit Mode becomes the saved one.
+	--
+	-- Its position is Edit Mode's too, but at login the window lands off its
+	-- saved spot (clamped against Blizzard's wider box, or moved by the chat
+	-- code's own position restore) until Edit Mode next applies its anchor.
+	-- Put it back on the saved anchor the same way Edit Mode does.
+	local function RestoreAnchor()
+		local chat = _G.DEFAULT_CHAT_FRAME
+		local info = chat and chat.systemInfo
+		local anchor = info and info.anchorInfo
+		if not anchor or InCombatLockdown() then return end
+		if chat.IsInDefaultPosition and chat:IsInDefaultPosition() then return end
+		local scale = chat:GetScale()
+		chat:ClearAllPoints()
+		chat:SetPoint(anchor.point, anchor.relativeTo, anchor.relativePoint,
+			anchor.offsetX / scale, anchor.offsetY / scale)
+		local anchor2 = info.anchorInfo2
+		if anchor2 then
+			chat:SetPoint(anchor2.point, anchor2.relativeTo, anchor2.relativePoint,
+				anchor2.offsetX / scale, anchor2.offsetY / scale)
+		end
+	end
+
 	ApplySavedSize()
 	local sizer = CreateFrame('Frame')
 	sizer:RegisterEvent('EDIT_MODE_LAYOUTS_UPDATED')
 	sizer:RegisterEvent('PLAYER_ENTERING_WORLD')
-	sizer:SetScript('OnEvent', function() C_Timer.After(0, ApplySavedSize) end)
+	sizer:RegisterEvent('UPDATE_CHAT_WINDOWS')
+	sizer:SetScript('OnEvent', function()
+		C_Timer.After(0, function()
+			ApplySavedSize()
+			RestoreAnchor()
+		end)
+	end)
+	if FCF_RestorePositionAndDimensions then
+		hooksecurefunc('FCF_RestorePositionAndDimensions', function(chat)
+			if chat == _G.DEFAULT_CHAT_FRAME then RestoreAnchor() end
+		end)
+	end
 	if EventRegistry then
 		EventRegistry:RegisterCallback('EditMode.Exit', function()
 			if BenisUI.db.chat.size then SaveSize(_G.DEFAULT_CHAT_FRAME) end

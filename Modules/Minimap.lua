@@ -202,6 +202,40 @@ local function OnAdoptedSetPoint()
 	C_Timer.After(0, LayoutButtons)
 end
 
+-- Forever's day/night indicator: a plain frame with a sun/moon background
+-- and a gold ring. Blizzard rescales and re-anchors it whenever the minimap
+-- scale changes, so the scale is pinned and the ring dropped.
+local function SetupDielFrame(frame)
+	frame:SetScale(1)
+	hooksecurefunc(frame, 'SetScale', function(self, scale)
+		if scale ~= 1 then self:SetScale(1) end
+	end)
+	frame:SetSize(BUTTON_SIZE, BUTTON_SIZE)
+
+	for _, region in next, { frame:GetRegions() } do
+		if region ~= frame.Background and region.IsObjectType and region:IsObjectType('Texture') then
+			region:SetAlpha(0)
+		end
+	end
+
+	-- day/night swaps call SetSize on the background; two anchors win over it
+	local background = frame.Background
+	if background then
+		background:ClearAllPoints()
+		background:SetPoint('TOPLEFT', frame, 'TOPLEFT', 1, -1)
+		background:SetPoint('BOTTOMRIGHT', frame, 'BOTTOMRIGHT', -1, 1)
+	end
+
+	frame:EnableMouse(true)
+	frame:SetScript('OnEnter', function(self)
+		GameTooltip:SetOwner(self, 'ANCHOR_LEFT')
+		local isDay = C_DateAndTime and C_DateAndTime.IsDayTime and C_DateAndTime.IsDayTime()
+		GameTooltip:SetText(isDay and 'Day' or 'Night')
+		GameTooltip:Show()
+	end)
+	frame:SetScript('OnLeave', GameTooltip_Hide)
+end
+
 local function AdoptButton(button)
 	if collectedSet[button] then return end
 	collectedSet[button] = true
@@ -211,7 +245,9 @@ local function AdoptButton(button)
 	button:SetFrameStrata('MEDIUM')
 	button:SetFrameLevel(10)
 
-	if button == _G.ExpansionLandingPageMinimapButton then
+	if button == _G.MinimapCluster.DielFrame then
+		SetupDielFrame(button)
+	elseif button == _G.ExpansionLandingPageMinimapButton then
 		-- its layered art ignores SetSize; shrink the whole thing instead
 		local width = button:GetWidth()
 		if width and width > BUTTON_SIZE then
@@ -241,6 +277,12 @@ local function CollectButtons()
 				AdoptButton(child)
 			end
 		end
+	end
+
+	-- Forever's day/night indicator
+	local diel = _G.MinimapCluster.DielFrame
+	if diel then
+		AdoptButton(diel)
 	end
 
 	local expansion = _G.ExpansionLandingPageMinimapButton
