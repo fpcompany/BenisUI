@@ -37,6 +37,9 @@ local defaults = {
 	consumables = {
 		position = nil, -- { point = 'BOTTOMRIGHT', x, y }
 	},
+	chat = {
+		size = nil, -- { width, height } of the main (docked) chat window
+	},
 	focusHighlight = {
 		color = { 0.09, 0.52, 0.82 }, -- the BenisUI blue
 		thickness = 2,
@@ -47,6 +50,9 @@ local defaults = {
 local charDefaults = {
 	bags = {
 		setHighlights = {}, -- [setID] = { enabled = bool, r, g, b (nil = quality color) }
+	},
+	chat = {
+		fontSize = 12, -- every chat window; picking a size in the tab menu updates it
 	},
 }
 

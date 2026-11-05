@@ -19,6 +19,7 @@ Modules\FocusHighlight.lua
 Modules\ActionBars.lua
 Modules\Minimap.lua
 Modules\QuestTracker.lua
+Modules\Chat.lua
 Modules\BottomPanel.lua
 Modules\Consumables.lua
 Modules\Tooltips.lua

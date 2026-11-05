@@ -121,9 +121,119 @@ local QUEST_BUTTONS = {
 	'QuestFrameGoodbyeButton', 'QuestFrameCancelButton',
 }
 
+-- Blizzard colors quest text dark brown for its parchment; on our dark panel
+-- it goes white. Colored strings (links, completed objectives, item counts)
+-- are left alone: only the dark ones are touched.
+local function White(fontString)
+	if fontString and fontString.SetTextColor then
+		fontString:SetTextColor(1, 1, 1)
+	end
+end
+
+local function WhiteIfDark(fontString)
+	if not fontString or not fontString.GetTextColor then return end
+	local r, g, b = fontString:GetTextColor()
+	if r + g + b < 1.2 then White(fontString) end
+end
+
+local function IsInside(frame, ancestor)
+	while frame do
+		if frame == ancestor then return true end
+		frame = frame:GetParent()
+	end
+	return false
+end
+
+-- strings QuestInfo_Display colors by material
+local QUEST_INFO_TEXT = {
+	'QuestInfoTitleHeader', 'QuestInfoDescriptionHeader',
+	'QuestInfoObjectivesHeader', 'QuestInfoDescriptionText',
+	'QuestInfoObjectivesText', 'QuestInfoGroupSize', 'QuestInfoRewardText',
+	'QuestInfoTimerText', 'QuestInfoSpellObjectiveLearnLabel',
+	'QuestInfoQuestType', 'QuestInfoRequiredMoneyText',
+}
+
+local QUEST_REWARD_TEXT = {
+	'Header', 'ItemChooseText', 'ItemReceiveText', 'PlayerTitleText',
+	'QuestSessionBonusReward',
+}
+
+local function WhitenQuestInfo(_, parentFrame)
+	-- QuestInfo is shared with the quest log, which keeps its parchment
+	local questFrame = _G.QuestFrame
+	if not questFrame or not parentFrame or not IsInside(parentFrame, questFrame) then
+		-- Blizzard only recolors when the material changes; make sure it
+		-- does after we've been here, or the log inherits our white text
+		if _G.QuestInfoFrame then _G.QuestInfoFrame.material = nil end
+		return
+	end
+
+	for _, name in next, QUEST_INFO_TEXT do
+		WhiteIfDark(_G[name])
+	end
+
+	local rewards = _G.QuestInfoRewardsFrame
+	if rewards then
+		for _, key in next, QUEST_REWARD_TEXT do
+			WhiteIfDark(rewards[key])
+		end
+		WhiteIfDark(rewards.XPFrame and rewards.XPFrame.ReceiveText)
+		local pool = rewards.spellHeaderPool
+		if pool then pool.textR, pool.textG, pool.textB = 1, 1, 1 end
+	end
+
+	local objectives = _G.QuestInfoObjectivesFrame
+	for _, objective in next, objectives and objectives.Objectives or {} do
+		WhiteIfDark(objective)
+	end
+
+	if _G.QuestInfoFrame then _G.QuestInfoFrame.material = nil end
+end
+
+-- the greeting list bakes black into its quest titles; a fixed color
+-- overrides the inline code, the same way Blizzard's high-contrast mode does
+local function WhitenGreeting()
+	local panel = _G.QuestFrameGreetingPanel
+	local pool = panel and panel.titleButtonPool
+	if not pool then return end
+	for button in pool:EnumerateActive() do
+		local text = button:GetFontString()
+		if text then
+			text:SetFixedColor(true)
+			White(text)
+		end
+	end
+end
+
+local function WhitenQuestText()
+	if QuestInfo_Display then
+		hooksecurefunc('QuestInfo_Display', WhitenQuestInfo)
+	end
+	-- progress and greeting panels go through these two
+	if QuestFrame_SetTextColor then
+		hooksecurefunc('QuestFrame_SetTextColor', White)
+	end
+	if QuestFrame_SetTitleTextColor then
+		hooksecurefunc('QuestFrame_SetTitleTextColor', White)
+	end
+	if QuestFrameProgressItems_Update then
+		hooksecurefunc('QuestFrameProgressItems_Update', function()
+			WhiteIfDark(_G.QuestProgressRequiredMoneyText)
+		end)
+	end
+
+	local greeting = _G.QuestFrameGreetingPanel
+	if greeting then greeting:HookScript('OnShow', WhitenGreeting) end
+	if QuestFrameGreetingPanel_OnShow then
+		hooksecurefunc('QuestFrameGreetingPanel_OnShow', WhitenGreeting)
+	end
+end
+
 local function SkinQuest()
 	local frame = Skin:Get('QuestFrame')
 	if not frame then return end
+
+	WhitenQuestText()
 
 	Skin:Frame(frame)
 
@@ -160,6 +270,18 @@ local function SkinGossip()
 	Skin:Strip(frame.GreetingPanel or _G.GossipFrameGreetingPanel)
 	Skin:Button(frame.GreetingPanel and frame.GreetingPanel.GoodbyeButton
 		or _G.GossipFrameGoodbyeButton)
+
+	-- greeting and option text is themed by the frame's text-contrast
+	-- container, which reapplies its colors on every update
+	if frame.UpdateFontStrings then
+		hooksecurefunc(frame, 'UpdateFontStrings', function(self)
+			for fontString in next, self.fontStrings or {} do
+				fontString:SetFixedColor(true)
+				White(fontString)
+			end
+		end)
+		frame:UpdateFontStrings()
+	end
 end
 
 --------------------------------------------------------------------------------

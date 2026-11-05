@@ -333,12 +333,27 @@ function Skin:EditBox(box)
 	if not box or box.BenisUISkinned then return end
 	box.BenisUISkinned = true
 
-	Skin:Strip(box)
+	-- Not Skin:Strip: the blinking cursor and the selection highlight are
+	-- textures on the edit box too, and blanking every region takes them out.
+	-- Template art (InputBoxTemplate, the chat input's borders and focus
+	-- glow) all sits in the BACKGROUND and BORDER layers, so only those go.
+	for _, region in next, { box:GetRegions() } do
+		if region.IsObjectType and region:IsObjectType('Texture') then
+			local layer = region:GetDrawLayer()
+			if layer == 'BACKGROUND' or layer == 'BORDER' then
+				BlankTexture(region)
+			end
+		end
+	end
+
 	local name = box.GetName and box:GetName()
 	if name then
-		for _, part in next, { 'Left', 'Middle', 'Right' } do
+		for _, part in next, { 'Left', 'Middle', 'Mid', 'Right' } do
 			BlankTexture(_G[name .. part])
 		end
+	end
+	for _, key in next, { 'Left', 'Middle', 'Mid', 'Right', 'focusLeft', 'focusMid', 'focusRight' } do
+		BlankTexture(box[key])
 	end
 
 	local backdrop = Skin:Backdrop(box)
