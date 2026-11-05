@@ -7,7 +7,7 @@ local BenisUI = ns.BenisUI
 local BottomPanel = BenisUI:RegisterModule('BottomPanel')
 
 local FONT = BenisUI.media.font
-local TEXTURE = BenisUI.media.texture
+local Skin = BenisUI.Skin
 
 local PANEL_HEIGHT = 30
 local MICRO_SCALE = 0.62
@@ -58,11 +58,7 @@ local function CreateBagsButton()
 	icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	icon:SetAllPoints()
 
-	local border = CreateFrame('Frame', nil, button, 'BackdropTemplate')
-	border:SetPoint('TOPLEFT', -1, 1)
-	border:SetPoint('BOTTOMRIGHT', 1, -1)
-	border:SetBackdrop({ edgeFile = TEXTURE, edgeSize = 1 })
-	border:SetBackdropBorderColor(0, 0, 0, 1)
+	Skin:Border(button)
 
 	local highlight = button:CreateTexture(nil, 'HIGHLIGHT')
 	highlight:SetColorTexture(1, 1, 1, 0.2)
@@ -163,10 +159,7 @@ function BottomPanel:OnInit()
 	panel:SetPoint('BOTTOMRIGHT', UIParent, 'BOTTOMRIGHT', -2, 2)
 	panel:SetFrameStrata('LOW')
 
-	-- same backdrop as the bag frame
-	panel:SetBackdrop({ bgFile = TEXTURE, edgeFile = TEXTURE, edgeSize = 1 })
-	panel:SetBackdropColor(0.06, 0.06, 0.06, 0.94)
-	panel:SetBackdropBorderColor(0, 0, 0, 1)
+	Skin:Panel(panel)
 
 	CreateBagsButton()
 	SetupMicroMenu()

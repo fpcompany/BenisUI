@@ -28,6 +28,7 @@ local CreateAbbreviateConfig = CreateAbbreviateConfig
 local issecret = issecretvalue or function() return false end
 
 local WHITE8X8 = 'Interface\\Buttons\\WHITE8X8'
+local Skin = BenisUI.Skin
 local CIRCLE_MASK = 'Interface\\Masks\\CircleMaskScalable'
 -- Expressway (bundled, same font ElvUI uses) has uniform stroke weights, so
 -- the black outline renders evenly at small sizes
@@ -434,9 +435,7 @@ local function CreateUnitFrame(unit)
 	end)
 
 	-- black border + black body (the visible black is the missing health)
-	frame:SetBackdrop({ bgFile = WHITE8X8, edgeFile = WHITE8X8, edgeSize = 1 })
-	frame:SetBackdropColor(0, 0, 0, 1)
-	frame:SetBackdropBorderColor(0, 0, 0, 1)
+	Skin:Panel(frame):SetBackdropColor(0, 0, 0, 1)
 
 	local health = CreateFrame('StatusBar', nil, frame)
 	health:SetStatusBarTexture(WHITE8X8)

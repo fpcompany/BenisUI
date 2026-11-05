@@ -37,6 +37,10 @@ local defaults = {
 	consumables = {
 		position = nil, -- { point = 'BOTTOMRIGHT', x, y }
 	},
+	focusHighlight = {
+		color = { 0.09, 0.52, 0.82 }, -- the BenisUI blue
+		thickness = 2,
+	},
 }
 
 -- per-character settings (equipment set IDs are per-character)
@@ -76,6 +80,11 @@ end)
 
 SLASH_BENISUI1 = '/benisui'
 SLASH_BENISUI2 = '/bui'
-SlashCmdList.BENISUI = function()
+SlashCmdList.BENISUI = function(msg)
+	if strtrim(msg or ''):lower() == 'skins' then
+		BenisUI.Skin:ReportMissing()
+		return
+	end
+
 	ToggleAllBags()
 end

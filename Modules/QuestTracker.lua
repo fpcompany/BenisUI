@@ -7,6 +7,7 @@ local QuestTracker = BenisUI:RegisterModule('QuestTracker')
 
 local FONT = BenisUI.media.font
 local TEXTURE = BenisUI.media.texture
+local Skin = BenisUI.Skin
 
 local TRACKER_NAMES = {
 	'ScenarioObjectiveTracker',
@@ -69,11 +70,7 @@ local function ReskinItemButton(button)
 		icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	end
 
-	local border = CreateFrame('Frame', nil, button, 'BackdropTemplate')
-	border:SetPoint('TOPLEFT', -1, 1)
-	border:SetPoint('BOTTOMRIGHT', 1, -1)
-	border:SetBackdrop({ edgeFile = TEXTURE, edgeSize = 1 })
-	border:SetBackdropBorderColor(0, 0, 0, 1)
+	Skin:Border(button)
 
 	local count = button.Count
 	if count then
@@ -103,13 +100,9 @@ local function ReskinBar(bar)
 	bar:SetStatusBarTexture(TEXTURE)
 	bar:SetStatusBarColor(0.25, 0.6, 1)
 
-	local backdrop = CreateFrame('Frame', nil, bar, 'BackdropTemplate')
-	backdrop:SetPoint('TOPLEFT', -1, 1)
-	backdrop:SetPoint('BOTTOMRIGHT', 1, -1)
+	local backdrop = Skin:Backdrop(bar, nil, 1)
 	backdrop:SetFrameLevel(math.max(0, bar:GetFrameLevel() - 1))
-	backdrop:SetBackdrop({ bgFile = TEXTURE, edgeFile = TEXTURE, edgeSize = 1 })
 	backdrop:SetBackdropColor(0, 0, 0, 0.8)
-	backdrop:SetBackdropBorderColor(0, 0, 0, 1)
 
 	if bar.Label then
 		bar.Label:SetFont(FONT, 11, 'OUTLINE')

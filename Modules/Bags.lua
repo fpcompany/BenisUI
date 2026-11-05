@@ -3,6 +3,7 @@ local BenisUI = ns.BenisUI
 
 local Bags = BenisUI:RegisterModule('Bags')
 local Sets = BenisUI:GetModule('EquipmentSets')
+local Skin = BenisUI.Skin
 
 local GetContainerNumSlots = C_Container.GetContainerNumSlots
 local GetContainerNumFreeSlots = C_Container.GetContainerNumFreeSlots
@@ -816,13 +817,7 @@ function Bags:CreateView(config)
 	frame:SetClampedToScreen(true)
 	frame:EnableMouse(true)
 
-	frame:SetBackdrop({
-		bgFile = EDGE_TEXTURE,
-		edgeFile = EDGE_TEXTURE,
-		edgeSize = 1,
-	})
-	frame:SetBackdropColor(0.06, 0.06, 0.06, 0.94)
-	frame:SetBackdropBorderColor(0, 0, 0, 1)
+	Skin:Panel(frame)
 
 	local pos = db[config.positionKey]
 	if pos then

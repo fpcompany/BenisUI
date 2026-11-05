@@ -7,7 +7,7 @@ local BenisUI = ns.BenisUI
 local MinimapMod = BenisUI:RegisterModule('Minimap')
 
 local FONT = BenisUI.media.font
-local TEXTURE = BenisUI.media.texture
+local Skin = BenisUI.Skin
 
 local SQUARE_MASK = 130937 -- Interface\ChatFrame\ChatFrameBackground (what ElvUI uses)
 
@@ -20,19 +20,6 @@ local collected = {} -- ordered list of adopted buttons
 local collectedSet = {}
 local layingOut = false
 local layoutQueued = false
-
-local hidden = CreateFrame('Frame')
-hidden:Hide()
-
-local function Kill(frame)
-	if not frame then return end
-	if frame.UnregisterAllEvents then
-		frame:UnregisterAllEvents()
-		frame:SetParent(hidden)
-	end
-	frame:Hide()
-	if frame.SetAlpha then frame:SetAlpha(0) end
-end
 
 --------------------------------------------------------------------------------
 -- Square map
@@ -68,24 +55,19 @@ local function SquareMinimap()
 		return 'SQUARE'
 	end
 
-	local border = CreateFrame('Frame', nil, minimap, 'BackdropTemplate')
-	border:SetPoint('TOPLEFT', -1, 1)
-	border:SetPoint('BOTTOMRIGHT', 1, -1)
-	border:SetFrameLevel(minimap:GetFrameLevel())
-	border:SetBackdrop({ edgeFile = TEXTURE, edgeSize = 1 })
-	border:SetBackdropBorderColor(0, 0, 0, 1)
+	Skin:Border(minimap):SetFrameLevel(minimap:GetFrameLevel())
 
 	if _G.MinimapCompassTexture then _G.MinimapCompassTexture:SetAlpha(0) end
 
 	local cluster = _G.MinimapCluster
 	if cluster.BorderTop then cluster.BorderTop:SetAlpha(0) end
-	if cluster.ZoneTextButton then Kill(cluster.ZoneTextButton) end
+	if cluster.ZoneTextButton then Skin:Kill(cluster.ZoneTextButton) end
 
-	Kill(minimap.ZoomIn)
-	Kill(minimap.ZoomOut)
-	Kill(_G.TimeManagerClockButton)
-	Kill(_G.GameTimeFrame)
-	Kill(_G.AddonCompartmentFrame)
+	Skin:Kill(minimap.ZoomIn)
+	Skin:Kill(minimap.ZoomOut)
+	Skin:Kill(_G.TimeManagerClockButton)
+	Skin:Kill(_G.GameTimeFrame)
+	Skin:Kill(_G.AddonCompartmentFrame)
 
 	ResizeMinimap()
 	if cluster.Layout then
@@ -241,13 +223,9 @@ local function AdoptButton(button)
 	end
 
 	-- solid black slot behind the button
-	local background = CreateFrame('Frame', nil, buttonBar, 'BackdropTemplate')
+	local background = Skin:Backdrop(buttonBar, button, 1)
 	background:SetFrameLevel(1)
-	background:SetPoint('TOPLEFT', button, 'TOPLEFT', -1, 1)
-	background:SetPoint('BOTTOMRIGHT', button, 'BOTTOMRIGHT', 1, -1)
-	background:SetBackdrop({ bgFile = TEXTURE, edgeFile = TEXTURE, edgeSize = 1 })
 	background:SetBackdropColor(0, 0, 0, 1)
-	background:SetBackdropBorderColor(0, 0, 0, 1)
 	button.BenisUIBackground = background
 
 	hooksecurefunc(button, 'SetPoint', OnAdoptedSetPoint)

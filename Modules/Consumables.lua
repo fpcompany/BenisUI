@@ -1,15 +1,16 @@
 local _, ns = ...
 local BenisUI = ns.BenisUI
 
--- Small panel of three secure buttons showing the state of the bags'
--- consumables: a healing item (Healthstone preferred, then healing potions),
--- a combat/mana potion and food. Each button shows the best matching item
--- with its total count and cooldown and uses it on click; an empty category
--- shows a red placeholder icon. Modeled on ElvUI WindTools' consumables bar.
+-- Small panel of secure buttons showing the state of the bags' consumables:
+-- a Healthstone, a healing potion, a combat/mana potion, a flask and food.
+-- Each button shows the best matching item of its category with the total
+-- count and cooldown and uses it on click; categories with nothing in the
+-- bags are hidden and the panel shrinks to fit. Modeled on ElvUI WindTools'
+-- consumables bar.
 local Consumables = BenisUI:RegisterModule('Consumables')
 
 local FONT = BenisUI.media.font
-local TEXTURE = BenisUI.media.texture
+local Skin = BenisUI.Skin
 
 local GetContainerNumSlots = C_Container.GetContainerNumSlots
 local GetContainerItemInfo = C_Container.GetContainerItemInfo
@@ -23,11 +24,17 @@ local BUTTON_SIZE = 30
 local SPACING = 4
 local PADDING = 5
 
-local HEALTHSTONE = 5512
+-- Healthstone gets its own slot so it doesn't hide the healing potions; the
+-- name fallback below catches any variant the ID list misses
+local HEALTHSTONES = {
+	[5512] = true, -- Healthstone
+}
 
--- healing potions that should land in the heal slot rather than the generic
--- potion slot; anything named '<...> Healing Potion' / '<...> Health Potion'
--- is caught by the name fallback below, this list covers renames and
+local HEALTHSTONE_PATTERN = 'Healthstone'
+
+-- healing potions that should land in the healing potion slot rather than the
+-- generic potion slot; anything named '<...> Healing Potion' / '<...> Health
+-- Potion' is caught by the name fallback below, this list covers renames and
 -- non-enUS clients
 local HEALING_POTIONS = {
 	[211878] = true, [211879] = true, [211880] = true, -- Algari Healing Potion
@@ -48,9 +55,15 @@ local FLASK_SUBCLASS = Enum.ItemConsumableSubclass
 
 local CATEGORIES = {
 	{
-		key = 'heal',
-		label = 'Healing',
-		fallbackIcon = 'Interface\\Icons\\INV_Stone_04', -- healthstone
+		key = 'healthstone',
+		label = 'Healthstone',
+		fallbackIcon = 'Interface\\Icons\\INV_Stone_04',
+		lowCount = 0, -- Healthstones are unique, one is a full stack
+	},
+	{
+		key = 'healpotion',
+		label = 'Healing Potions',
+		fallbackIcon = 'Interface\\Icons\\INV_Potion_51',
 		lowCount = 3,
 	},
 	{
@@ -75,18 +88,22 @@ local CATEGORIES = {
 
 local panel
 local buttons = {} -- [key] = button
-local found = { heal = {}, potion = {}, flask = {}, food = {} } -- [key][itemID] = { id, count }
+local found = {} -- [category key][itemID] = { id, count }
+for _, category in next, CATEGORIES do
+	found[category.key] = {}
+end
 local infoPending = false -- an item's GetItemInfo wasn't cached during the scan
 local applyPending = false -- attribute changes blocked by combat
+local layoutPending = false -- show/hide/reposition blocked by combat
+local appliedLayout -- which categories the current layout has visible
 
 --------------------------------------------------------------------------------
 -- Classification
 --------------------------------------------------------------------------------
 
 local function Classify(itemID)
-	if itemID == HEALTHSTONE or HEALING_POTIONS[itemID] then
-		return 'heal'
-	end
+	if HEALTHSTONES[itemID] then return 'healthstone' end
+	if HEALING_POTIONS[itemID] then return 'healpotion' end
 
 	local _, _, _, _, _, classID, subClassID = GetItemInfoInstant(itemID)
 	if classID ~= Enum.ItemClass.Consumable then return end
@@ -99,7 +116,7 @@ local function Classify(itemID)
 		end
 		for _, pattern in next, HEAL_NAME_PATTERNS do
 			if name:find(pattern, 1, true) then
-				return 'heal'
+				return 'healpotion'
 			end
 		end
 		return 'potion'
@@ -107,6 +124,17 @@ local function Classify(itemID)
 		return 'flask'
 	elseif subClassID == Enum.ItemConsumableSubclass.Fooddrink then
 		return 'food'
+	end
+
+	-- Healthstone sits outside the potion subclass, so catch renamed or
+	-- non-enUS variants by name
+	local name = GetItemInfo(itemID)
+	if not name then
+		infoPending = true
+		return
+	end
+	if name:find(HEALTHSTONE_PATTERN, 1, true) then
+		return 'healthstone'
 	end
 end
 
@@ -116,13 +144,9 @@ local function ItemLevel(itemID)
 	return level or 0
 end
 
--- Healthstone beats everything in its slot (it's free); otherwise prefer the
--- higher item level, then the bigger stack
+-- prefer the higher item level, then the bigger stack
 local function IsBetter(a, b)
 	if not b then return true end
-	if (a.id == HEALTHSTONE) ~= (b.id == HEALTHSTONE) then
-		return a.id == HEALTHSTONE
-	end
 	local levelA, levelB = ItemLevel(a.id), ItemLevel(b.id)
 	if levelA ~= levelB then return levelA > levelB end
 	return a.count > b.count
@@ -194,6 +218,8 @@ local function UpdateButton(button)
 			button.count:SetTextColor(1, 1, 1)
 		end
 	else
+		-- only seen when the category empties mid-fight: the button can't be
+		-- hidden until combat ends, so show it greyed out and empty
 		button.icon:SetTexture(button.category.fallbackIcon)
 		button.icon:SetDesaturated(true)
 		button.icon:SetVertexColor(1, 0.35, 0.35)
@@ -209,11 +235,53 @@ local function UpdateButton(button)
 	end
 end
 
+-- Pack the buttons of the categories we actually have items for, left to
+-- right, and size the panel around them; hide it entirely when the bags hold
+-- none of them. Secure buttons can't be shown, hidden or moved in combat, so
+-- a change that lands mid-fight waits for PLAYER_REGEN_ENABLED.
+local function LayoutButtons()
+	local layout = ''
+	for _, category in ipairs(CATEGORIES) do
+		layout = layout .. (buttons[category.key].entry and '1' or '0')
+	end
+	if layout == appliedLayout then return end
+
+	if InCombatLockdown() then
+		layoutPending = true
+		return
+	end
+
+	local shown = 0
+	for _, category in ipairs(CATEGORIES) do
+		local button = buttons[category.key]
+		if button.entry then
+			button:ClearAllPoints()
+			button:SetPoint('LEFT', panel, 'LEFT', PADDING + shown * (BUTTON_SIZE + SPACING), 0)
+			button:Show()
+			shown = shown + 1
+		else
+			button:Hide()
+		end
+	end
+
+	if shown > 0 then
+		panel:SetSize(
+			PADDING * 2 + shown * BUTTON_SIZE + (shown - 1) * SPACING,
+			BUTTON_SIZE + PADDING * 2)
+		panel:Show()
+	else
+		panel:Hide()
+	end
+
+	appliedLayout = layout
+end
+
 local function UpdateAll()
 	ScanBags()
 	for _, button in pairs(buttons) do
 		UpdateButton(button)
 	end
+	LayoutButtons()
 end
 
 --------------------------------------------------------------------------------
@@ -257,11 +325,11 @@ local function SavePosition()
 	BenisUI.db.consumables.position = { point = point, x = x, y = y }
 end
 
-local function CreateButton(category, index)
+local function CreateButton(category)
 	local button = CreateFrame('Button', 'BenisUIConsumable' .. category.key, panel,
 		'SecureActionButtonTemplate')
 	button:SetSize(BUTTON_SIZE, BUTTON_SIZE)
-	button:SetPoint('LEFT', panel, 'LEFT', PADDING + (index - 1) * (BUTTON_SIZE + SPACING), 0)
+	button:Hide() -- LayoutButtons places and shows the ones we have items for
 	button.category = category
 
 	button:SetAttribute('type', 'item')
@@ -272,11 +340,7 @@ local function CreateButton(category, index)
 	icon:SetAllPoints()
 	button.icon = icon
 
-	local border = CreateFrame('Frame', nil, button, 'BackdropTemplate')
-	border:SetPoint('TOPLEFT', -1, 1)
-	border:SetPoint('BOTTOMRIGHT', 1, -1)
-	border:SetBackdrop({ edgeFile = TEXTURE, edgeSize = 1 })
-	border:SetBackdropBorderColor(0, 0, 0, 1)
+	Skin:Border(button)
 
 	local cooldown = CreateFrame('Cooldown', nil, button, 'CooldownFrameTemplate')
 	cooldown:SetAllPoints(icon)
@@ -316,6 +380,7 @@ local function CreatePanel()
 		PADDING * 2 + #CATEGORIES * BUTTON_SIZE + (#CATEGORIES - 1) * SPACING,
 		BUTTON_SIZE + PADDING * 2)
 	panel:SetFrameStrata('LOW')
+	panel:Hide() -- the first scan sizes and shows it
 
 	local saved = BenisUI.db.consumables.position
 	if saved then
@@ -325,10 +390,7 @@ local function CreatePanel()
 		panel:SetPoint('BOTTOMRIGHT', UIParent, 'BOTTOMRIGHT', -2, 36)
 	end
 
-	-- same backdrop as the bottom panel
-	panel:SetBackdrop({ bgFile = TEXTURE, edgeFile = TEXTURE, edgeSize = 1 })
-	panel:SetBackdropColor(0.06, 0.06, 0.06, 0.94)
-	panel:SetBackdropBorderColor(0, 0, 0, 1)
+	Skin:Panel(panel)
 
 	-- shift-drag to move (out of combat), like the unit frames
 	panel:SetMovable(true)
@@ -345,8 +407,8 @@ local function CreatePanel()
 		SavePosition()
 	end)
 
-	for index, category in next, CATEGORIES do
-		buttons[category.key] = CreateButton(category, index)
+	for _, category in ipairs(CATEGORIES) do
+		buttons[category.key] = CreateButton(category)
 	end
 end
 
@@ -391,6 +453,10 @@ function Consumables:OnInit()
 				for _, button in pairs(buttons) do
 					ApplyAttribute(button)
 				end
+			end
+			if layoutPending then
+				layoutPending = false
+				LayoutButtons()
 			end
 		end
 	end)

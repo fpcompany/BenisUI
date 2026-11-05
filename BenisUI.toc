@@ -1,4 +1,4 @@
-## Interface: 120100
+## Interface: 120100, 16001
 ## Title: |cff1784d1Benis|rUI
 ## Notes: Full UI replacement. Currently replaces the inventory with a combined bag frame.
 ## Author: Benis
@@ -9,13 +9,18 @@
 ## X-Website: https://github.com/benis/BenisUI
 
 Core.lua
+Modules\Skin.lua
 Modules\EquipmentSets.lua
 Modules\Bags.lua
 Modules\Character.lua
+Modules\Inspect.lua
 Modules\UnitFrames.lua
+Modules\FocusHighlight.lua
 Modules\ActionBars.lua
 Modules\Minimap.lua
 Modules\QuestTracker.lua
 Modules\BottomPanel.lua
 Modules\Consumables.lua
 Modules\Tooltips.lua
+Modules\BlizzardFrames.lua
+Modules\TalkingHead.lua
