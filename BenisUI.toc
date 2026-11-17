@@ -6,22 +6,36 @@
 ## SavedVariables: BenisUIDB
 ## SavedVariablesPerCharacter: BenisUICharDB
 ## Category-enUS: UI Overhaul
-## X-Website: https://github.com/benis/BenisUI
+## IconTexture: Interface\AddOns\BenisUI\Media\Icon
+## X-Website: https://github.com/fpcompany/BenisUI
 
 Core.lua
 Modules\Skin.lua
+Modules\AuraTimer.lua
 Modules\EquipmentSets.lua
 Modules\Bags.lua
+Modules\BagsForever.lua
+Modules\BagsRecipe.lua
+Modules\BagsCategories.lua
 Modules\Character.lua
 Modules\Inspect.lua
 Modules\UnitFrames.lua
+Modules\GroupFrames.lua
+Modules\Nameplates.lua
+Modules\NameplatesCast.lua
+Modules\NameplatesAuras.lua
 Modules\FocusHighlight.lua
 Modules\ActionBars.lua
 Modules\Minimap.lua
 Modules\QuestTracker.lua
+Modules\QuestAnnounce.lua
+Modules\QuestAutoComplete.lua
 Modules\Chat.lua
 Modules\BottomPanel.lua
 Modules\Consumables.lua
+Modules\MerchantStack.lua
+Modules\LootRolls.lua
+Modules\ItemCounts.lua
 Modules\Tooltips.lua
 Modules\BlizzardFrames.lua
 Modules\TalkingHead.lua

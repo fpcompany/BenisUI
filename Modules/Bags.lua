@@ -28,15 +28,20 @@ for bagID = BACKPACK, NUM_BAGS do
 	end
 end
 
-local CHARACTER_BANK_BAGS = {}
-for bagID = BagIndex.CharacterBankTab_1 or 6, BagIndex.CharacterBankTab_6 or 11 do
-	CHARACTER_BANK_BAGS[#CHARACTER_BANK_BAGS + 1] = bagID
+-- the tab count differs per client (retail: 6 character + 5 warband tabs,
+-- Forever: 9 + 9), so walk the enum instead of assuming a range
+local function CollectBankTabs(prefix)
+	local bags = {}
+	local index = 1
+	while BagIndex[prefix .. index] do
+		bags[index] = BagIndex[prefix .. index]
+		index = index + 1
+	end
+	return bags
 end
 
-local WARBAND_BANK_BAGS = {}
-for bagID = BagIndex.AccountBankTab_1 or 12, BagIndex.AccountBankTab_5 or 16 do
-	WARBAND_BANK_BAGS[#WARBAND_BANK_BAGS + 1] = bagID
-end
+local CHARACTER_BANK_BAGS = CollectBankTabs('CharacterBankTab_')
+local WARBAND_BANK_BAGS = CollectBankTabs('AccountBankTab_')
 
 local ALL_BANK_BAGS = {}
 for _, list in next, { CHARACTER_BANK_BAGS, WARBAND_BANK_BAGS } do
@@ -73,6 +78,15 @@ local FRAME_PADDING = 10
 local HEADER_HEIGHT = 34
 local FOOTER_HEIGHT = 26
 local SECTION_GAP = 14 -- extra gap above a labeled section
+local BAR_SIZE = 26 -- bag slot / bank tab buttons under the header
+local BAR_SPACING = 4
+local BAR_HEIGHT = BAR_SIZE + 2
+
+-- Blizzard's equipped-bag buttons, adopted into the inventory bag bar
+local BAG_SLOT_BUTTONS = {
+	'CharacterBag0Slot', 'CharacterBag1Slot', 'CharacterBag2Slot', 'CharacterBag3Slot',
+	'CharacterReagentBag0Slot',
+}
 
 local EMPTY_R, EMPTY_G, EMPTY_B = 0.22, 0.22, 0.22
 
@@ -173,6 +187,283 @@ local function IsItemLevelUpgrade(itemLevel, equipLoc)
 	end
 
 	return lowest ~= nil and itemLevel > lowest
+end
+
+--------------------------------------------------------------------------------
+-- Stat-based upgrades (WoW Forever / Camelot)
+--------------------------------------------------------------------------------
+
+-- Forever (Interface 16001) is a vanilla-style ruleset: item level says little
+-- about gear, so arrows come from comparing stats instead.
+local IS_FOREVER = (select(4, GetBuildInfo()) or 0) < 20000
+local GetItemStats = C_Item.GetItemStats or _G.GetItemStats
+local GetInventoryItemLink = GetInventoryItemLink
+
+-- Per-class stat weights. Only shaman is known; other classes get no arrows on
+-- Forever. Any stat not listed but present counts OTHER_STAT_WEIGHT per point,
+-- so any stats beat no stats. Armor is never weighed against stats: it only
+-- breaks ties when the stat scores are equal.
+local OTHER_STAT_WEIGHT = 1
+local ARMOR_STAT = 'RESISTANCE0_NAME'
+local CLASS_STAT_WEIGHTS = {
+	-- WoW Forever enhancement guide:
+	-- Strength = Attack Power > Intellect > Spell Power = Agility > Spirit,
+	-- crit chance is very important (Flurry), hit is not a priority while leveling
+	SHAMAN = {
+		ITEM_MOD_STRENGTH_SHORT = 10,
+		ITEM_MOD_ATTACK_POWER_SHORT = 10,
+		ITEM_MOD_INTELLECT_SHORT = 8,
+		ITEM_MOD_SPELL_POWER_SHORT = 6,
+		ITEM_MOD_SPELL_DAMAGE_DONE_SHORT = 6,
+		ITEM_MOD_AGILITY_SHORT = 6,
+		ITEM_MOD_SPIRIT_SHORT = 2,
+		ITEM_MOD_STAMINA_SHORT = 4,
+		ITEM_MOD_CRIT_RATING_SHORT = 140, -- per 1% crit, roughly 20 Agility's crit plus Flurry
+		ITEM_MOD_CRIT_MELEE_RATING_SHORT = 140,
+		ITEM_MOD_HIT_RATING_SHORT = 15, -- per 1% hit, low while leveling
+		ITEM_MOD_HIT_MELEE_RATING_SHORT = 15,
+		ITEM_MOD_DAMAGE_PER_SECOND_SHORT = 10, -- weapon DPS
+		[ARMOR_STAT] = 0, -- tie-breaker only, see ScoreLink
+	},
+}
+
+local playerWeights
+local function GetPlayerWeights()
+	if playerWeights == nil then
+		local _, classToken = UnitClass('player')
+		playerWeights = CLASS_STAT_WEIGHTS[classToken] or false
+	end
+	return playerWeights
+end
+
+-- returns statScore, armor (0, 0 for nothing / unknown item)
+local function ScoreLink(link, weights)
+	local stats = link and GetItemStats(link)
+	if not stats then return 0, 0 end
+
+	local score = 0
+	for stat, value in pairs(stats) do
+		if stat ~= ARMOR_STAT then
+			score = score + (weights[stat] or OTHER_STAT_WEIGHT) * value
+		end
+	end
+	return score, stats[ARMOR_STAT] or 0
+end
+
+local function ScoreInvSlot(invSlot, weights)
+	return ScoreLink(GetInventoryItemLink('player', invSlot), weights)
+end
+
+local function IsBetter(score, armor, otherScore, otherArmor)
+	if score ~= otherScore then return score > otherScore end
+	return armor > otherArmor
+end
+
+local function IsTwoHandEquipped()
+	local link = GetInventoryItemLink('player', 16)
+	if not link then return false end
+	local _, _, _, equipLoc = GetItemInfoInstant(link)
+	return equipLoc == 'INVTYPE_2HWEAPON'
+end
+
+local OFFHAND_LOCS = {
+	INVTYPE_WEAPONOFFHAND = true, INVTYPE_SHIELD = true, INVTYPE_HOLDABLE = true,
+}
+
+-- red tooltip text means the player can't use it (class, proficiency, level)
+local function HasRedLine(data)
+	local lines = data and data.lines
+	if not lines then return false end
+	for i = 2, #lines do
+		local line = lines[i]
+		for _, color in next, { line.leftColor, line.rightColor } do
+			if color and color.r > 0.99 and color.g < 0.2 and color.b < 0.2 then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function IsBagItemUsable(bagID, slotID)
+	if not (C_TooltipInfo and C_TooltipInfo.GetBagItem) then return true end
+	return not HasRedLine(C_TooltipInfo.GetBagItem(bagID, slotID))
+end
+
+-- Forever keeps vanilla's weapon and armor skills: the skill is a spell, and
+-- you can only wear the item once you know it (shaman/hunter mail at 40, ...)
+local ArmorSub = Enum.ItemArmorSubclass or {}
+local WeaponSub = Enum.ItemWeaponSubclass or {}
+local SKILL_SPELLS = {
+	[Enum.ItemClass.Armor] = {
+		[ArmorSub.Cloth or 1] = 9078,
+		[ArmorSub.Leather or 2] = 9077,
+		[ArmorSub.Mail or 3] = 8737,
+		[ArmorSub.Plate or 4] = 750,
+		[ArmorSub.Shield or 6] = 9116,
+	},
+	[Enum.ItemClass.Weapon] = {
+		[WeaponSub.Axe1H or 0] = 196,
+		[WeaponSub.Axe2H or 1] = 197,
+		[WeaponSub.Bows or 2] = 264,
+		[WeaponSub.Guns or 3] = 266,
+		[WeaponSub.Mace1H or 4] = 198,
+		[WeaponSub.Mace2H or 5] = 199,
+		[WeaponSub.Polearm or 6] = 200,
+		[WeaponSub.Sword1H or 7] = 201,
+		[WeaponSub.Sword2H or 8] = 202,
+		[WeaponSub.Staff or 10] = 227,
+		[WeaponSub.Unarmed or 13] = 15590, -- fist weapons
+		[WeaponSub.Dagger or 15] = 1180,
+		[WeaponSub.Thrown or 16] = 2567,
+		[WeaponSub.Crossbow or 18] = 5011,
+		[WeaponSub.Wand or 19] = 5009,
+	},
+}
+-- classes whose relic slot takes this armor subclass (totems, idols, librams)
+local RELIC_CLASS = {
+	[ArmorSub.Totem or 9] = 'SHAMAN',
+	[ArmorSub.Idol or 8] = 'DRUID',
+	[ArmorSub.Libram or 7] = 'PALADIN',
+}
+local FISHING_POLE = WeaponSub.Fishingpole or 20
+
+local DoesSpellExist = C_Spell and C_Spell.DoesSpellExist
+local function KnowsSkill(spellID)
+	-- a skill spell this client doesn't have can't be checked; let it pass
+	if DoesSpellExist and not DoesSpellExist(spellID) then return true end
+	return IsPlayerSpell(spellID)
+end
+
+-- can the player wear this at all, right now?
+local function CanWear(link)
+	local _, _, _, _, reqLevel = GetItemInfo(link)
+	if reqLevel and reqLevel > UnitLevel('player') then return false end
+
+	if not IS_FOREVER then return true end -- retail: the tooltip check covers it
+
+	local _, _, _, _, _, classID, subclassID = GetItemInfoInstant(link)
+	if classID == Enum.ItemClass.Weapon and subclassID == FISHING_POLE then return false end
+
+	local relicClass = classID == Enum.ItemClass.Armor and RELIC_CLASS[subclassID]
+	if relicClass then
+		return relicClass == select(2, UnitClass('player'))
+	end
+
+	local skills = SKILL_SPELLS[classID]
+	local spellID = skills and skills[subclassID]
+	return not spellID or KnowsSkill(spellID)
+end
+
+-- body armor tiers, lowest to highest; only the best one the player knows gets
+-- arrows (a shaman stops seeing leather upgrades once mail is learned at 40)
+local ARMOR_TIERS = {
+	ArmorSub.Cloth or 1, ArmorSub.Leather or 2, ArmorSub.Mail or 3, ArmorSub.Plate or 4,
+}
+local ARMOR_TIER_RANK = {}
+for rank, subclassID in ipairs(ARMOR_TIERS) do ARMOR_TIER_RANK[subclassID] = rank end
+
+-- slots that take any armor type regardless of tier (cloaks are always cloth)
+local TIERLESS_EQUIP_LOCS = {
+	INVTYPE_CLOAK = true, INVTYPE_NECK = true, INVTYPE_FINGER = true,
+	INVTYPE_TRINKET = true, INVTYPE_BODY = true, INVTYPE_TABARD = true,
+}
+
+-- rank of the highest armor skill the player knows, or nil when none of the
+-- skill spells can be checked on this client (no restriction then)
+local function GetBestArmorRank()
+	local best
+	for rank, subclassID in ipairs(ARMOR_TIERS) do
+		local spellID = SKILL_SPELLS[Enum.ItemClass.Armor][subclassID]
+		if (not DoesSpellExist or DoesSpellExist(spellID)) and IsPlayerSpell(spellID) then
+			best = rank
+		end
+	end
+	return best
+end
+
+-- is this the best armor type the player can wear (or not tiered armor at all)?
+local function IsBestArmorType(link, equipLoc)
+	if TIERLESS_EQUIP_LOCS[equipLoc] then return true end
+	local _, _, _, _, _, classID, subclassID = GetItemInfoInstant(link)
+	if classID ~= Enum.ItemClass.Armor then return true end
+	local rank = ARMOR_TIER_RANK[subclassID]
+	if not rank then return true end -- shields, relics, misc
+	local best = GetBestArmorRank()
+	return not best or rank >= best
+end
+
+-- better stats than what it would replace, for the player's class?
+local function IsStatUpgrade(link, equipLoc)
+	local weights = GetPlayerWeights()
+	if not weights then return false end
+
+	local invSlots = EQUIP_LOC_SLOTS[equipLoc]
+	if not invSlots then return false end
+
+	local score, armor = ScoreLink(link, weights)
+	if score <= 0 and armor <= 0 then return false end
+
+	local otherScore, otherArmor
+	if equipLoc == 'INVTYPE_2HWEAPON' then
+		-- replaces both hands
+		local mainScore, mainArmor = ScoreInvSlot(16, weights)
+		local offScore, offArmor = ScoreInvSlot(17, weights)
+		otherScore, otherArmor = mainScore + offScore, mainArmor + offArmor
+	elseif OFFHAND_LOCS[equipLoc] and IsTwoHandEquipped() then
+		-- an off-hand would replace the two-hander
+		otherScore, otherArmor = ScoreInvSlot(16, weights)
+	else
+		if equipLoc == 'INVTYPE_WEAPON' and not (CanDualWield and CanDualWield()) then
+			invSlots = { 16 }
+		end
+		-- compete with the weakest equipped piece in the slot group
+		for _, invSlot in ipairs(invSlots) do
+			local s, a = ScoreInvSlot(invSlot, weights)
+			if not otherScore or IsBetter(otherScore, otherArmor, s, a) then
+				otherScore, otherArmor = s, a
+			end
+		end
+	end
+
+	return IsBetter(score, armor, otherScore, otherArmor)
+end
+
+-- gear upgrade check shared by bag slots and quest rewards: stats on Forever,
+-- item level on retail. isUsable is a function so the (costly) usability check
+-- only runs once the item already looks like an upgrade.
+local function IsUpgrade(link, equipLoc, itemLevel, isUsable)
+	local better
+	if IS_FOREVER then
+		better = IsStatUpgrade(link, equipLoc)
+	else
+		better = IsItemLevelUpgrade(itemLevel, equipLoc)
+	end
+	return better and CanWear(link) and IsBestArmorType(link, equipLoc)
+		and (not isUsable or isUsable())
+end
+
+-- for windows that only have a link (quest rewards, loot rolls)
+local function IsLinkUpgrade(link, isUsable)
+	if not link then return false end
+	local _, _, _, equipLoc, _, classID = GetItemInfoInstant(link)
+	local isGear = (classID == Enum.ItemClass.Weapon or classID == Enum.ItemClass.Armor)
+		and not ITEMLEVEL_EXCLUDED_EQUIP_LOCS[equipLoc]
+	if not isGear then return false end
+	local itemLevel = C_Item.GetDetailedItemLevelInfo and C_Item.GetDetailedItemLevelInfo(link)
+	return IsUpgrade(link, equipLoc, itemLevel, isUsable) or false
+end
+
+-- green arrow in the top-left corner of an icon, created on first use
+local function GetArrow(owner, icon)
+	local arrow = owner.benisUpgradeIcon
+	if not arrow and icon then
+		arrow = owner:CreateTexture(nil, 'OVERLAY', nil, 7)
+		arrow:SetAtlas('bags-greenarrow', true)
+		arrow:SetPoint('TOPLEFT', icon, 'TOPLEFT', 1, -1)
+		owner.benisUpgradeIcon = arrow
+	end
+	return arrow
 end
 
 -- extra search words per equip location, on top of the localized slot name
@@ -410,15 +701,25 @@ function Bags:UpdateSlot(slot)
 		trackText, isCrafted = ScanTooltip(bagID, slotID)
 	end
 
-	-- grey out junk and gear below the Hero/Myth upgrade tracks (crafted exempt)
-	local lowTrack = isGear and not (isCrafted or HasKeepTrackWord(trackText))
-	local desaturated = hasItem and (info.isLocked or isJunk or lowTrack)
+	local isUpgrade = isGear and IsUpgrade(info.hyperlink, equipLoc, itemLevel, function()
+		return IsBagItemUsable(bagID, slotID)
+	end) or false
 
-	slot.UpgradeIcon:SetShown(isGear and IsItemLevelUpgrade(itemLevel, equipLoc))
+	-- grey out junk and gear below the Hero/Myth upgrade tracks (crafted exempt);
+	-- Forever has no upgrade tracks, and upgrades always stay saturated
+	local lowTrack = isGear and not IS_FOREVER and not (isCrafted or HasKeepTrackWord(trackText))
+	local desaturated = hasItem and (info.isLocked or isJunk or (lowTrack and not isUpgrade))
+
+	slot.UpgradeIcon:SetShown(isUpgrade)
 
 	SetItemButtonTexture(slot, icon)
+	-- crop the bevel baked into Blizzard icon art (our border replaces it);
+	-- redone every update since the empty-slot SetAtlas resets tex coords
+	if hasItem and slot.icon then slot.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
 	SetItemButtonCount(slot, info and info.stackCount or 0)
 	slot.desaturated = desaturated -- applied in ApplySearchToSlot
+	slot.itemID = hasItem and info.itemID or nil -- for the recipe filter
+	slot.itemName = hasItem and info.itemName or nil
 
 	local special = hasItem and GetSpecialColor(info.itemID)
 	if special then
@@ -555,27 +856,58 @@ function Bags:SlotMatchesSearch(slot)
 	return true
 end
 
+-- Recipe filter: while a recipe is selected in the crafting window, every item
+-- that recipe does not use is greyed out and darkened (see BagsRecipe.lua).
+-- itemIDs: [itemID] = true for reagents; names: [item name] = true for tools,
+-- which the API only reports by name. nil clears the filter.
+function Bags:SetRecipeFilter(itemIDs, names)
+	self.recipeItems, self.recipeNames = itemIDs, names
+	for _, view in ipairs(self.views) do
+		if view.frame:IsShown() then
+			self:ApplySearch(view)
+		end
+	end
+end
+
+function Bags:SlotIsRecipeItem(slot)
+	return (slot.itemID and self.recipeItems[slot.itemID])
+		or (slot.itemName and self.recipeNames and self.recipeNames[slot.itemName])
+		or false
+end
+
+local RECIPE_DIM = 0.3 -- icon and border brightness of items the recipe doesn't use
+
 function Bags:ApplySearchToSlot(slot)
 	local query = slot.view.searchQuery
 	local searching = query and query ~= ''
 	local matches = not searching or self:SlotMatchesSearch(slot)
 
-	slot:SetAlpha((searching and not matches) and 0.15 or 1)
+	-- a search overrides the recipe filter, so anything can still be looked up
+	local dimmed = self.recipeItems ~= nil and not searching and slot.itemID ~= nil
+		and not self:SlotIsRecipeItem(slot)
+
+	-- hovering a bag / bank tab button dims every slot outside it
+	local hoverBag = slot.view.hoverBag
+	local outsideHover = hoverBag ~= nil and slot.BagID ~= hoverBag
+	slot:SetAlpha(((searching and not matches) or outsideHover) and 0.15 or 1)
 
 	-- while searching, found items lose their desaturation
-	local desaturated = slot.desaturated and not (searching and matches)
+	local desaturated = dimmed or (slot.desaturated and not (searching and matches))
 	SetItemButtonDesaturated(slot, desaturated)
+	local shade = dimmed and RECIPE_DIM or 1
+	SetItemButtonTextureVertexColor(slot, shade, shade, shade)
 
 	-- while searching, no slot shows a border
 	local border = slot.qualityBorder
 	if border.r then
-		border:SetBackdropBorderColor(border.r, border.g, border.b, searching and 0 or 1)
+		border:SetBackdropBorderColor(border.r * shade, border.g * shade, border.b * shade,
+			searching and 0 or 1)
 	end
 
 	if slot.ilvlR then
 		if desaturated then
 			-- match the greyed icon: quality color reduced to its luminance
-			local gray = 0.299 * slot.ilvlR + 0.587 * slot.ilvlG + 0.114 * slot.ilvlB
+			local gray = (0.299 * slot.ilvlR + 0.587 * slot.ilvlG + 0.114 * slot.ilvlB) * shade
 			slot.itemLevel:SetTextColor(gray, gray, gray)
 		else
 			slot.itemLevel:SetTextColor(slot.ilvlR, slot.ilvlG, slot.ilvlB)
@@ -652,24 +984,33 @@ local function CountFree(bags)
 	return free, total
 end
 
+Bags.buyTabLabel = 'Buy Tab'
+
+function Bags:UpdateBankFreeText(view)
+	local bankFree, bankTotal = CountFree(CHARACTER_BANK_BAGS)
+	local wbFree, wbTotal = CountFree(WARBAND_BANK_BAGS)
+	view.freeText:SetFormattedText('Bank %d/%d free  —  Warband %d/%d free',
+		bankFree, bankTotal, wbFree, wbTotal)
+end
+
 function Bags:UpdateFooter(view)
 	if view.config.isBank then
-		local bankFree, bankTotal = CountFree(CHARACTER_BANK_BAGS)
-		local wbFree, wbTotal = CountFree(WARBAND_BANK_BAGS)
-		view.freeText:SetFormattedText('Bank %d/%d free  —  Warband %d/%d free',
-			bankFree, bankTotal, wbFree, wbTotal)
+		self:UpdateBankFreeText(view)
 
 		-- buy-next-tab button for the active bank (the Reagents tab has none)
-		local section = view.config.sections[view.activeSection]
+		local section = view.config.sections[view.activeSection or 1]
 		local canBuy = section.bankType and C_Bank and C_Bank.CanPurchaseBankTab
 			and C_Bank.CanPurchaseBankTab(section.bankType)
 		if canBuy then
+			local label = self.buyTabLabel
 			local tabData = C_Bank.FetchNextPurchasableBankTabData(section.bankType)
 			if tabData then
-				view.buyTabButton:SetText(('Buy Tab: %s'):format(GetMoneyString(tabData.tabCost, true)))
+				view.buyTabButton:SetText(('%s: %s'):format(label, GetMoneyString(tabData.tabCost, true)))
 			else
-				view.buyTabButton:SetText('Buy Tab')
+				view.buyTabButton:SetText(label)
 			end
+			-- Blizzard's purchase handler reads the bank to buy from here
+			view.buyTabButton:SetAttribute('overrideBankType', section.bankType)
 			view.buyTabButton:Show()
 		else
 			view.buyTabButton:Hide()
@@ -690,7 +1031,22 @@ function Bags:Layout(view)
 	local slotSize = view.config.slotSize
 	local step = slotSize + db.spacing
 	local columns = view.config.columns
-	local originY = HEADER_HEIGHT + FRAME_PADDING
+	local originY = HEADER_HEIGHT + BAR_HEIGHT + FRAME_PADDING
+
+	if view.config.isBank then
+		self:UpdateBankBar(view)
+	end
+
+	-- category view (BagsCategories.lua) has its own layout
+	for _, label in pairs(view.categoryLabels or {}) do
+		label:Hide()
+	end
+	if self.IsCategoryMode and self:IsCategoryMode(view) then
+		for _, label in pairs(view.sectionLabels) do
+			label:Hide()
+		end
+		return self:LayoutCategories(view)
+	end
 
 	local col, row = 0, 0
 	local yOffset = 0 -- accumulated section label space
@@ -782,6 +1138,268 @@ function Bags:Layout(view)
 end
 
 --------------------------------------------------------------------------------
+-- Bag bar (equipped bags / bank tabs)
+--------------------------------------------------------------------------------
+
+local function nop() end
+
+function Bags:SetHoverBag(view, bagID)
+	view.hoverBag = bagID
+	self:ApplySearch(view)
+end
+
+-- Square, flat bar button look shared by adopted bag slots and our tab buttons
+local function StyleBarButton(button, icon)
+	local bg = button:CreateTexture(nil, 'BACKGROUND', nil, -1)
+	bg:SetAllPoints()
+	bg:SetColorTexture(0.09, 0.09, 0.09, 0.9)
+
+	icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+	local highlight = button:GetHighlightTexture()
+	if not highlight then
+		button:SetHighlightTexture(EDGE_TEXTURE)
+		highlight = button:GetHighlightTexture()
+	end
+	highlight:SetAllPoints()
+	highlight:SetColorTexture(1, 1, 1, 0.2)
+	highlight:SetBlendMode('BLEND')
+	highlight:SetAlpha(1)
+
+	Skin:Border(button)
+end
+
+-- Blizzard's own bag slot buttons (killed along with BagsBar by BottomPanel)
+-- keep all their behavior: tooltip, drag a bag on to equip, drag off to
+-- swap/unequip, drop an item on to put it in that bag, filter assignments.
+function Bags:AdoptBagButton(view, button, previous)
+	button:SetParent(view.bar)
+	button:SetSize(BAR_SIZE, BAR_SIZE)
+	button:Show()
+
+	-- collapsing Blizzard's bag bar would hide it
+	button.SetBarExpanded = nop
+
+	-- BagsBar:Layout re-anchors the buttons; put ours back every time
+	local anchorTo, anchorPoint, x = view.bar, 'LEFT', 0
+	if previous then
+		anchorTo, anchorPoint, x = previous, 'RIGHT', BAR_SPACING
+	end
+	local placing
+	local function Place()
+		placing = true
+		button:ClearAllPoints()
+		button:SetPoint('LEFT', anchorTo, anchorPoint, x, 0)
+		placing = false
+	end
+	hooksecurefunc(button, 'SetPoint', function()
+		if not placing then Place() end
+	end)
+	Place()
+
+	-- square icon: drop the round mask and Blizzard's bag ring art
+	local mask = button.CircleMask
+	if mask then
+		for _, key in ipairs({ 'icon', 'searchOverlay', 'ItemContextOverlay' }) do
+			local texture = button[key]
+			if texture and texture.RemoveMaskTexture then
+				texture:RemoveMaskTexture(mask)
+			end
+		end
+	end
+	if button.IconBorder then button.IconBorder:SetAlpha(0) end
+	if button.SlotHighlightTexture then button.SlotHighlightTexture:SetAlpha(0) end
+
+	-- Blizzard re-applies the ring atlases on every update
+	button.UpdateTextures = function(b)
+		local normal = b:GetNormalTexture()
+		if normal then normal:SetAlpha(0) end
+		local pushed = b:GetPushedTexture()
+		if pushed then pushed:SetAlpha(0) end
+	end
+	button:UpdateTextures()
+
+	StyleBarButton(button, button.icon)
+
+	-- a plain click would toggle Blizzard's (hidden) bag frame and close ours;
+	-- keep only the "drop the held item into this bag" part
+	button:SetScript('OnClick', function(b)
+		if KeybindFrames_InQuickKeybindMode and KeybindFrames_InQuickKeybindMode() then return end
+		b:PutItemInBag()
+	end)
+
+	button:HookScript('OnEnter', function(b)
+		self:SetHoverBag(view, b:GetBagID())
+	end)
+	button:HookScript('OnLeave', function()
+		self:SetHoverBag(view, nil)
+	end)
+end
+
+function Bags:CreateBagBar(view)
+	local bar = CreateFrame('Frame', nil, view.frame)
+	bar:SetPoint('TOPLEFT', view.frame, 'TOPLEFT', FRAME_PADDING, -(HEADER_HEIGHT + 2))
+	bar:SetPoint('TOPRIGHT', view.frame, 'TOPRIGHT', -FRAME_PADDING, -(HEADER_HEIGHT + 2))
+	bar:SetHeight(BAR_SIZE)
+	view.bar = bar
+
+	if view.config.isBank then
+		view.tabButtons = {}
+		return
+	end
+
+	local previous
+	for _, name in ipairs(BAG_SLOT_BUTTONS) do
+		local button = _G[name]
+		if button then
+			self:AdoptBagButton(view, button, previous)
+			previous = button
+		end
+	end
+end
+
+-- purchased bank tabs belonging to the active bank section
+function Bags:GetSectionTabs(view)
+	local tabs = {}
+	if not (FetchPurchasedBankTabData and Enum.BankType) then return tabs end
+
+	local section = view.config.sections[view.activeSection]
+	local bankTypes = section.bankType and { section.bankType }
+		or { Enum.BankType.Character, Enum.BankType.Account }
+
+	for _, bankType in ipairs(bankTypes) do
+		for _, data in ipairs(FetchPurchasedBankTabData(bankType) or {}) do
+			local isReagentTab = bit.band(data.depositFlags or 0, REAGENT_FLAG) ~= 0
+			local include
+			if section.onlyReagents then
+				include = isReagentTab
+			else
+				include = not (section.excludeReagents and isReagentTab)
+			end
+			if include then
+				data.bankType = data.bankType or bankType
+				tabs[#tabs + 1] = data
+			end
+		end
+	end
+
+	return tabs
+end
+
+local function ShowTabTooltip(button)
+	local data = button.data
+	if not data then return end
+
+	GameTooltip:SetOwner(button, 'ANCHOR_TOP')
+	local name = (data.name and data.name ~= '') and data.name or ('Tab ' .. button.index)
+	GameTooltip:SetText(name, NORMAL_FONT_COLOR.r, NORMAL_FONT_COLOR.g, NORMAL_FONT_COLOR.b)
+
+	local flags = data.depositFlags
+	if flags and Enum.BagSlotFlags then
+		local expansion
+		if Enum.BagSlotFlags.ExpansionCurrent and bit.band(flags, Enum.BagSlotFlags.ExpansionCurrent) ~= 0 then
+			expansion = BANK_TAB_EXPANSION_FILTER_CURRENT
+		elseif Enum.BagSlotFlags.ExpansionLegacy and bit.band(flags, Enum.BagSlotFlags.ExpansionLegacy) ~= 0 then
+			expansion = BANK_TAB_EXPANSION_FILTER_LEGACY
+		end
+		if expansion and BANK_TAB_EXPANSION_ASSIGNMENT then
+			GameTooltip:AddLine(BANK_TAB_EXPANSION_ASSIGNMENT:format(expansion), 1, 1, 1)
+		end
+
+		local list = ContainerFrameUtil_ConvertFilterFlagsToList
+			and ContainerFrameUtil_ConvertFilterFlagsToList(flags)
+		if list and BANK_TAB_DEPOSIT_ASSIGNMENTS then
+			GameTooltip:AddLine(BANK_TAB_DEPOSIT_ASSIGNMENTS:format(list), 1, 1, 1, true)
+		end
+	end
+
+	GameTooltip:AddLine('Click to edit name, icon and deposit settings', 0, 1, 0)
+	GameTooltip:Show()
+end
+
+function Bags:CreateTabButton(view, index)
+	local button = CreateFrame('Button', nil, view.bar)
+	button:SetSize(BAR_SIZE, BAR_SIZE)
+	button:SetPoint('LEFT', view.bar, 'LEFT', (index - 1) * (BAR_SIZE + BAR_SPACING), 0)
+	button:RegisterForClicks('LeftButtonUp', 'RightButtonUp')
+	button.index = index
+
+	button.icon = button:CreateTexture(nil, 'ARTWORK')
+	button.icon:SetAllPoints()
+	StyleBarButton(button, button.icon)
+
+	button:SetScript('OnEnter', function(b)
+		ShowTabTooltip(b)
+		self:SetHoverBag(view, b.data and b.data.ID)
+	end)
+	button:SetScript('OnLeave', function()
+		GameTooltip:Hide()
+		self:SetHoverBag(view, nil)
+	end)
+	button:SetScript('OnClick', function(b)
+		PlaySound(SOUNDKIT.IG_MAINMENU_OPTION)
+		self:ToggleTabSettings(view, b.data)
+	end)
+
+	view.tabButtons[index] = button
+	return button
+end
+
+function Bags:UpdateBankBar(view)
+	local tabs = self:GetSectionTabs(view)
+	for index, data in ipairs(tabs) do
+		local button = view.tabButtons[index] or self:CreateTabButton(view, index)
+		button.data = data
+		button.icon:SetTexture(data.icon or QUESTION_MARK_ICON or 134400)
+		button:Show()
+	end
+	for index = #tabs + 1, #view.tabButtons do
+		view.tabButtons[index].data = nil
+		view.tabButtons[index]:Hide()
+	end
+
+	-- the settings popup holds a stale copy of the tab it edits
+	local menu = self.tabSettingsMenu
+	if menu and menu:IsShown() then
+		menu:Hide()
+	end
+end
+
+-- Blizzard's tab settings popup (name, icon, deposit filters) lives inside the
+-- never-rendered BankPanel; lift it out and feed it the tab directly.
+function Bags:GetTabSettingsMenu()
+	if self.tabSettingsMenu then return self.tabSettingsMenu end
+
+	local menu = BankPanel and BankPanel.TabSettingsMenu
+	if not (menu and menu.Update) then return end
+
+	menu:SetParent(UIParent)
+	menu:SetFrameStrata('DIALOG')
+	menu:SetClampedToScreen(true)
+	self.tabSettingsMenu = menu
+	return menu
+end
+
+function Bags:ToggleTabSettings(view, data)
+	local menu = data and self:GetTabSettingsMenu()
+	if not menu then return end
+
+	if menu:IsShown() and menu.selectedTabData and menu.selectedTabData.ID == data.ID then
+		menu:Hide()
+		return
+	end
+
+	menu.selectedTabData = data
+	menu:ClearAllPoints()
+	menu:SetPoint('TOPLEFT', view.frame, 'TOPRIGHT', 4, 0)
+	if menu:IsShown() then
+		menu:Update()
+	else
+		menu:Show()
+	end
+end
+
+--------------------------------------------------------------------------------
 -- View frames
 --------------------------------------------------------------------------------
 
@@ -833,6 +1451,7 @@ function Bags:CreateView(config)
 	header:SetPoint('TOPRIGHT')
 	header:SetHeight(HEADER_HEIGHT)
 	header:EnableMouse(true)
+	view.header = header
 	header:RegisterForDrag('LeftButton')
 	header:SetScript('OnDragStart', function() frame:StartMoving() end)
 	header:SetScript('OnDragStop', function()
@@ -881,6 +1500,7 @@ function Bags:CreateView(config)
 	sort:SetPoint('RIGHT', close, 'LEFT', -4, 0)
 	sort:SetText('Sort')
 	sort:SetScript('OnClick', config.sortFunc)
+	view.sortButton = sort
 
 	local search = CreateFrame('EditBox', config.frameName .. 'SearchBox', header, 'SearchBoxTemplate')
 	search:SetSize(150, 20)
@@ -892,21 +1512,26 @@ function Bags:CreateView(config)
 	end)
 	view.searchBox = search
 
+	if config.categories and self.CreateCategoryToggle then
+		self:CreateCategoryToggle(view)
+	end
+
+	self:CreateBagBar(view)
+
 	-- footer
 	view.freeText = frame:CreateFontString(nil, 'OVERLAY', 'GameFontNormalSmall')
 	view.freeText:SetPoint('BOTTOMLEFT', FRAME_PADDING, FRAME_PADDING)
 
 	if config.isBank then
-		-- purchases the next tab of whichever bank is active, through
-		-- Blizzard's own confirmation popup (it fetches cost and text itself)
-		local buy = CreateFrame('Button', nil, frame, 'UIPanelButtonTemplate')
-		buy:SetSize(140, 20)
+		-- purchases the next tab of whichever bank is active. PurchaseBankTab
+		-- is protected: a popup opened from addon code is tainted and its
+		-- accept gets blocked. Blizzard's script template opens the popup
+		-- securely and takes the bank type from the 'overrideBankType'
+		-- attribute (set in UpdateFooter), so the click handler stays theirs.
+		local buy = CreateFrame('Button', nil, frame,
+			'UIPanelButtonTemplate, BankPanelPurchaseButtonScriptTemplate')
+		buy:SetSize(150, 20)
 		buy:SetPoint('BOTTOMRIGHT', -FRAME_PADDING, FRAME_PADDING - 2)
-		buy:SetScript('OnClick', function()
-			local section = config.sections[view.activeSection]
-			PlaySound(SOUNDKIT.IG_MAINMENU_OPTION)
-			StaticPopup_Show('CONFIRM_BUY_BANK_TAB', nil, nil, { bankType = section.bankType })
-		end)
 		buy:Hide()
 		view.buyTabButton = buy
 	else
@@ -953,6 +1578,7 @@ function Bags:CreateView(config)
 
 	frame:SetScript('OnHide', function()
 		PlaySound(SOUNDKIT.IG_BACKPACK_CLOSE)
+		view.hoverBag = nil
 		config.onHidden()
 	end)
 
@@ -1018,19 +1644,34 @@ function Bags:OnEvent(event, arg1, arg2)
 	end
 
 	if event == 'BAG_CONTAINER_UPDATE' then
-		if self.inventory.frame:IsShown() then
-			self:Layout(self.inventory)
-			self:UpdateAll(self.inventory)
+		for _, view in ipairs(self.views) do -- bank too: its bags can change size
+			if view.frame:IsShown() then
+				self:Layout(view)
+				self:UpdateAll(view)
+			end
 		end
 	elseif event == 'BAG_UPDATE' then
 		local view = self.viewByBagID[arg1]
 		if view and view.frame:IsShown() then
 			Sets:MarkDirty() -- an item may have moved; set locations follow it
 			self:UpdateBag(view, arg1)
+			-- in the category view a slot may now hold an item of another
+			-- block; BAG_UPDATE_DELAYED doesn't fire on every client
+			if self.IsCategoryMode and self:IsCategoryMode(view)
+				and self:CategoriesChanged(view, arg1) then
+				self:QueueCategoryLayout(view)
+			end
 		end
 	elseif event == 'BAG_UPDATE_DELAYED' then
+		-- in the category view an item that changed may belong to another group
+		for _, view in ipairs(self.views) do
+			if view.frame:IsShown() and self.IsCategoryMode and self:IsCategoryMode(view) then
+				self:Layout(view)
+			end
+		end
 		self:UpdateShownViews()
-	elseif event == 'PLAYER_EQUIPMENT_CHANGED' then
+	elseif event == 'PLAYER_EQUIPMENT_CHANGED' or event == 'LEARNED_SPELL_IN_TAB'
+		or event == 'LEARNED_SPELL_IN_SKILL_LINE' then
 		self:UpdateShownViews() -- equipped ilvls changed; recompute upgrade arrows
 	elseif event == 'BAG_UPDATE_COOLDOWN' then
 		self:UpdateCooldowns()
@@ -1060,6 +1701,103 @@ end
 -- Init
 --------------------------------------------------------------------------------
 
+--------------------------------------------------------------------------------
+-- Quest reward arrows (same upgrade rules as bag slots)
+--------------------------------------------------------------------------------
+
+local function GetRewardItem(button)
+	local index = button:GetID()
+	local rewardType = button.type -- 'choice' or 'reward'
+	if not (index and rewardType) then return end
+
+	local link, isUsable
+	if _G.QuestInfoFrame and _G.QuestInfoFrame.questLog then
+		link = GetQuestLogItemLink(rewardType, index)
+		local getInfo = rewardType == 'choice' and GetQuestLogChoiceInfo or GetQuestLogRewardInfo
+		if getInfo then isUsable = select(5, getInfo(index)) end
+	else
+		link = GetQuestItemLink(rewardType, index)
+		isUsable = select(5, GetQuestItemInfo(rewardType, index))
+	end
+	return link, isUsable ~= false
+end
+
+local function UpdateRewardButton(button)
+	local icon = button.Icon or (button:GetName() and _G[button:GetName() .. 'IconTexture'])
+	local arrow = GetArrow(button, icon)
+	if not arrow then return end
+
+	local isUpgrade = false
+	if button:IsShown() and (button.objectType == nil or button.objectType == 'item') then
+		local link, usable = GetRewardItem(button)
+		isUpgrade = usable and IsLinkUpgrade(link)
+	end
+	arrow:SetShown(isUpgrade)
+end
+
+local function UpdateQuestRewards()
+	for _, frameName in next, { 'QuestInfoRewardsFrame', 'MapQuestInfoRewardsFrame' } do
+		local rewards = _G[frameName]
+		for _, button in next, rewards and rewards.RewardButtons or {} do
+			UpdateRewardButton(button)
+		end
+	end
+end
+
+function Bags:HookQuestRewards()
+	if QuestInfo_Display then
+		hooksecurefunc('QuestInfo_Display', UpdateQuestRewards)
+	end
+end
+
+--------------------------------------------------------------------------------
+-- Loot roll arrows
+--------------------------------------------------------------------------------
+
+local function UpdateLootRollFrame(frame)
+	local iconFrame = frame.IconFrame
+	local icon = iconFrame and (iconFrame.Icon or _G[iconFrame:GetName() and iconFrame:GetName() .. 'Icon'])
+	local arrow = GetArrow(iconFrame or frame, icon)
+	if not arrow then return end
+
+	local rollID = frame.rollID
+	local link = rollID and frame:IsShown() and GetLootRollItemLink(rollID)
+	arrow:SetShown(IsLinkUpgrade(link, function()
+		if not (C_TooltipInfo and C_TooltipInfo.GetLootRollItem) then return true end
+		return not HasRedLine(C_TooltipInfo.GetLootRollItem(rollID))
+	end))
+end
+
+local function UpdateLootRolls()
+	for i = 1, NUM_GROUP_LOOT_FRAMES or 4 do
+		local frame = _G['GroupLootFrame' .. i]
+		if frame then UpdateLootRollFrame(frame) end
+	end
+end
+
+function Bags:HookLootRolls()
+	for i = 1, NUM_GROUP_LOOT_FRAMES or 4 do
+		local frame = _G['GroupLootFrame' .. i]
+		if frame then frame:HookScript('OnShow', UpdateLootRollFrame) end
+	end
+	if GroupLootFrame_OpenNewFrame then
+		hooksecurefunc('GroupLootFrame_OpenNewFrame', UpdateLootRolls)
+	end
+end
+
+-- pieces the per-client bank variants (BagsForever.lua) build on
+Bags.isForever = IS_FOREVER
+Bags.CHARACTER_BANK_BAGS = CHARACTER_BANK_BAGS
+Bags.BAR_SIZE = BAR_SIZE
+Bags.BAR_SPACING = BAR_SPACING
+Bags.StyleBarButton = StyleBarButton
+Bags.CountFree = CountFree
+Bags.REAGENT_BAG = REAGENT_BAG
+Bags.HEADER_HEIGHT = HEADER_HEIGHT
+Bags.BAR_HEIGHT = BAR_HEIGHT
+Bags.FRAME_PADDING = FRAME_PADDING
+Bags.FOOTER_HEIGHT = FOOTER_HEIGHT
+
 function Bags:OnInit()
 	self.db = BenisUI.db.bags
 	self.views = {}
@@ -1074,6 +1812,7 @@ function Bags:OnInit()
 		frameName = 'BenisUI_BagFrame',
 		title = '|cff1784d1Benis|rUI Inventory',
 		isBank = false,
+		categories = true, -- category view toggle (BagsCategories.lua)
 		columns = self.db.columns,
 		slotSize = self.db.slotSize,
 		positionKey = 'position',
@@ -1091,7 +1830,7 @@ function Bags:OnInit()
 		end,
 	})
 
-	self.bank = self:CreateView({
+	local bankConfig = {
 		frameName = 'BenisUI_BankFrame',
 		title = '|cff1784d1Benis|rUI',
 		isBank = true,
@@ -1115,18 +1854,34 @@ function Bags:OnInit()
 			C_Container.SortAccountBankBags()
 		end,
 		onHidden = function()
+			local menu = Bags.tabSettingsMenu
+			if menu and menu:IsShown() then
+				menu:Hide()
+			end
 			if Bags.bankIsOpen then
 				CloseBank()
 			end
 		end,
-	})
+	}
+	-- per-client bank variants (BagsForever.lua) reshape the view here
+	if self.CustomizeBankConfig then
+		self:CustomizeBankConfig(bankConfig)
+	end
+	self.bank = self:CreateView(bankConfig)
 
 	DisableBlizzardBags()
 	self:HookOpenClose()
+	self:HookQuestRewards()
+	self:HookLootRolls()
 
 	local listener = CreateFrame('Frame')
 	for _, event in ipairs(BAG_EVENTS) do
 		listener:RegisterEvent(event)
+	end
+	-- learning a skill (mail at 40) changes the best armor type; the event was
+	-- renamed on retail, so register whichever this client has
+	for _, event in ipairs({ 'LEARNED_SPELL_IN_TAB', 'LEARNED_SPELL_IN_SKILL_LINE' }) do
+		pcall(listener.RegisterEvent, listener, event)
 	end
 	listener:SetScript('OnEvent', function(_, event, ...)
 		self:OnEvent(event, ...)

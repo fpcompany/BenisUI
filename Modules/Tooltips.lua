@@ -1,8 +1,9 @@
 local _, ns = ...
 local BenisUI = ns.BenisUI
 
--- Spell IDs on tooltips, the way ElvUI does it on retail:
--- * spells/macros via TooltipDataProcessor post calls
+-- Spell and item IDs on tooltips, the way ElvUI does it on retail:
+-- * spells/macros/items via TooltipDataProcessor post calls; items also get
+--   their counts in bags, bank and on alts
 -- * auras via Blizzard's tooltipShowAuraSpellIDs CVar -- aura data can be
 --   secret in Midnight, so the native display is the reliable path
 -- * spell chat links via SetItemRef
@@ -32,9 +33,23 @@ local function OnTooltipSetSpell(tooltip, data)
 	end
 end
 
+local function OnTooltipSetItem(tooltip, data)
+	if tooltip:IsForbidden() then return end
+	if tooltip ~= GameTooltip and tooltip ~= ItemRefTooltip then return end
+	if data and data.id then
+		-- counts in bags, bank and on alts (ItemCounts.lua)
+		local counts = BenisUI:GetModule('ItemCounts')
+		if counts then
+			counts:AddTooltipLines(tooltip, data.id)
+		end
+		AddIDLine(tooltip, data.id)
+	end
+end
+
 function Tooltips:OnInit()
 	TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Spell, OnTooltipSetSpell)
 	TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Macro, OnTooltipSetSpell)
+	TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, OnTooltipSetItem)
 
 	-- Blizzard resets this to 0 between sessions
 	SetCVar('tooltipShowAuraSpellIDs', 1)

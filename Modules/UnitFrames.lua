@@ -39,13 +39,14 @@ local FONT = 'Interface\\AddOns\\BenisUI\\Media\\Expressway.ttf'
 -- to C++ in 12.0 and accepts secret numbers, returning secret strings.
 --------------------------------------------------------------------------------
 
--- descending breakpoints; 658734 -> '658K', 6573400 -> '6.5M'
+-- descending breakpoints; 4321 -> '4321', 658734 -> '658K', 6573400 -> '6.5M'
+-- (K starts at 10k so low-level mobs show exact values instead of '1K')
 local abbrevInfo = {
 	breakpoints = {
 		{ breakpoint = 1e12, abbreviation = 'T', significandDivisor = 1e11, fractionDivisor = 10, abbreviationIsGlobal = false },
 		{ breakpoint = 1e9, abbreviation = 'B', significandDivisor = 1e8, fractionDivisor = 10, abbreviationIsGlobal = false },
 		{ breakpoint = 1e6, abbreviation = 'M', significandDivisor = 1e5, fractionDivisor = 10, abbreviationIsGlobal = false },
-		{ breakpoint = 1e3, abbreviation = 'K', significandDivisor = 1e3, fractionDivisor = 1, abbreviationIsGlobal = false },
+		{ breakpoint = 1e4, abbreviation = 'K', significandDivisor = 1e3, fractionDivisor = 1, abbreviationIsGlobal = false },
 	},
 }
 
@@ -169,9 +170,40 @@ end
 -- Updates
 --------------------------------------------------------------------------------
 
+-- Names are never cut off: WoW Forever names are two words and run long, so a
+-- name that doesn't fit its line is stepped down a point at a time until it
+-- does. Secret names (retail, in combat) can't be measured and keep the base
+-- size.
+local MIN_NAME_SIZE = 6
+
+local function SetFittedText(text, value, size, flags)
+	flags = flags or 'OUTLINE'
+	text:SetFont(FONT, CrispFontSize(text, size), flags)
+	text:SetText(value or '')
+	if not value or issecret(value) then return end
+
+	while size > MIN_NAME_SIZE do
+		local truncated = text:IsTruncated()
+		if issecret(truncated) or not truncated then break end
+		size = size - 1
+		text:SetFont(FONT, CrispFontSize(text, size), flags)
+	end
+end
+
+-- WoW Forever (Interface 16001) is realmless and every character has a first
+-- name and a surname: UnitName returns the surname where retail returns the
+-- realm. Retail keeps showing the bare name.
+local IS_FOREVER = (select(4, GetBuildInfo()) or 0) < 20000
+
+local function FullName(unit)
+	local name, surname = UnitName(unit)
+	if not IS_FOREVER or not name or not surname then return name end
+	if not issecret(surname) and surname == '' then return name end
+	return name .. ' ' .. surname -- concatenation is secret-safe
+end
+
 local function UpdateName(frame)
-	local name = UnitName(frame.unit)
-	frame.nameText:SetText(name or '')
+	SetFittedText(frame.nameText, FullName(frame.unit), frame.nameSize)
 end
 
 local function UpdateHealth(frame)
@@ -282,6 +314,28 @@ local function UpdatePlayerStatus()
 	end
 end
 
+-- target only: loot bag icon while the target is a corpse you can loot.
+-- CanLootUnit is missing on some clients and the GUID can be secret in
+-- restricted content; either way the icon just stays hidden.
+local CanLootUnit = CanLootUnit
+
+local function UpdateLoot(frame)
+	local icon = frame.lootIcon
+	if not icon then return end
+
+	local lootable = false
+	if CanLootUnit and UnitExists(frame.unit) then
+		local dead = UnitIsDead(frame.unit)
+		local guid = UnitGUID(frame.unit)
+		if not issecret(dead) and dead and guid and not issecret(guid) then
+			local hasLoot, canLoot = CanLootUnit(guid)
+			lootable = not issecret(hasLoot) and not issecret(canLoot)
+				and hasLoot and canLoot or false
+		end
+	end
+	icon:SetShown(lootable)
+end
+
 --------------------------------------------------------------------------------
 -- Class power pips (combo points, chi, holy power, soul shards, arcane
 -- charges, essence). Blizzard keeps these non-secret in Midnight.
@@ -370,11 +424,15 @@ local function UpdateAll(frame)
 		UpdatePlayerStatus()
 		UpdateClassPower()
 	end
+	UpdateLoot(frame)
 end
 
 local function OnUnitEvent(frame, event)
 	if event == 'UNIT_HEALTH' or event == 'UNIT_MAXHEALTH' then
 		UpdateHealth(frame)
+		UpdateLoot(frame)
+	elseif event == 'UNIT_FLAGS' then
+		UpdateLoot(frame)
 	elseif event == 'UNIT_POWER_FREQUENT' or event == 'UNIT_MAXPOWER' then
 		UpdatePower(frame)
 		if frame.unit == 'player' then UpdateClassPower() end
@@ -454,6 +512,7 @@ local function CreateUnitFrame(unit)
 	name:SetPoint('TOPRIGHT', frame, 'TOPRIGHT', -layout.circle * 0.6, -5)
 	name:SetJustifyH('LEFT')
 	frame.nameText = name
+	frame.nameSize = layout.nameSize
 
 	local healthText = CreateText(health, layout.healthSize)
 	healthText:SetPoint('LEFT', frame, 'LEFT', 9,
@@ -481,6 +540,16 @@ local function CreateUnitFrame(unit)
 	levelText:SetPoint('CENTER', ring, 'CENTER', 0, 0)
 	levelText:SetTextColor(0, 0, 0)
 	frame.levelText = levelText
+
+	if unit == 'target' then
+		local lootIcon = overlay:CreateTexture(nil, 'OVERLAY', nil, 7)
+		lootIcon:SetTexture('Interface\\GroupFrame\\UI-Group-MasterLooter')
+		lootIcon:SetSize(18, 18)
+		lootIcon:SetPoint('RIGHT', ring, 'LEFT', -2, 0)
+		lootIcon:Hide()
+		frame.lootIcon = lootIcon
+		frame:RegisterUnitEvent('UNIT_FLAGS', unit)
+	end
 
 	-- unit events (targettarget gets none of these; it runs off a ticker)
 	if unit ~= 'targettarget' then
@@ -537,6 +606,14 @@ local function HideBlizzardFrame(frame)
 	if power then power:UnregisterAllEvents() end
 end
 
+-- shared with the party / raid frames (GroupFrames.lua)
+UnitFrames.CreateText = CreateText
+UnitFrames.SetFittedText = SetFittedText
+UnitFrames.FullName = FullName
+UnitFrames.Short = Short
+UnitFrames.UpdateHealthColor = UpdateHealthColor
+UnitFrames.HideBlizzardFrame = HideBlizzardFrame
+
 --------------------------------------------------------------------------------
 -- Init
 --------------------------------------------------------------------------------
@@ -566,6 +643,8 @@ function UnitFrames:OnInit()
 	controller:RegisterEvent('UPDATE_SHAPESHIFT_FORM')
 	controller:RegisterEvent('UI_SCALE_CHANGED')
 	controller:RegisterEvent('DISPLAY_SIZE_CHANGED')
+	controller:RegisterEvent('LOOT_OPENED')
+	controller:RegisterEvent('LOOT_CLOSED')
 
 	controller:SetScript('OnEvent', function(_, event)
 		if event == 'PLAYER_ENTERING_WORLD' then
@@ -589,14 +668,25 @@ function UnitFrames:OnInit()
 			UpdateClassPower()
 		elseif event == 'UI_SCALE_CHANGED' or event == 'DISPLAY_SIZE_CHANGED' then
 			RefreshFonts()
+		elseif event == 'LOOT_OPENED' or event == 'LOOT_CLOSED' then
+			UpdateLoot(frames.target)
 		end
 	end)
 
-	-- targettarget has no unit events of its own; poll while visible
+	-- targettarget has no unit events of its own; poll while visible.
+	-- A dead target is polled too: loot shows up a moment after the kill and
+	-- goes away when someone else loots it, with no reliable event for either.
 	C_Timer.NewTicker(0.3, function()
 		local tot = frames.targettarget
 		if tot and tot:IsShown() then
 			UpdateAll(tot)
+		end
+		local target = frames.target
+		if target and target:IsShown() then
+			local dead = UnitIsDead('target')
+			if not issecret(dead) and dead then
+				UpdateLoot(target)
+			end
 		end
 	end)
 end

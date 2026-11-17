@@ -22,6 +22,7 @@ function BenisUI:GetModule(name)
 end
 
 local defaults = {
+	questAutoComplete = true, -- turn in finished quests (never accepts new ones)
 	bags = {
 		columns = 12,
 		bankColumns = 21,
@@ -37,8 +38,23 @@ local defaults = {
 	consumables = {
 		position = nil, -- { point = 'BOTTOMRIGHT', x, y }
 	},
+	lootRolls = {
+		position = nil, -- { point, x, y } of the loot roll panel
+	},
 	chat = {
 		size = nil, -- { width, height } of the main (docked) chat window
+		history = {}, -- sent messages, oldest first, without their channel
+	},
+	nameplates = {
+		enabled = true, -- false leaves Blizzard's nameplates alone
+		debuffs = true, -- the player's own debuffs above each enemy
+		buffs = true, -- buffs your group can dispel, above enemy players
+		tank = 'auto', -- threat colours for a tank: 'on' / 'off' / 'auto' (spec or role)
+		scale = nil, -- 0.5-3; nil follows the screen height
+	},
+	itemCounts = { -- item tooltip counts (ItemCounts.lua)
+		realms = {}, -- [realm][character] = { class, bags = { [itemID] = n }, bank = {...} }
+		warband = {}, -- [itemID] = n, retail warband bank
 	},
 	focusHighlight = {
 		color = { 0.09, 0.52, 0.82 }, -- the BenisUI blue
@@ -50,6 +66,7 @@ local defaults = {
 local charDefaults = {
 	bags = {
 		setHighlights = {}, -- [setID] = { enabled = bool, r, g, b (nil = quality color) }
+		categoryMode = false, -- inventory grouped by category instead of bag order
 	},
 	chat = {
 		fontSize = 12, -- every chat window; picking a size in the tab menu updates it
@@ -87,8 +104,24 @@ end)
 SLASH_BENISUI1 = '/benisui'
 SLASH_BENISUI2 = '/bui'
 SlashCmdList.BENISUI = function(msg)
-	if strtrim(msg or ''):lower() == 'skins' then
+	local cmd = strtrim(msg or ''):lower()
+	if cmd == 'skins' then
 		BenisUI.Skin:ReportMissing()
+		return
+	elseif cmd == 'rolltest' then
+		BenisUI:GetModule('LootRolls'):Test()
+		return
+	elseif cmd == 'autoquest' then
+		BenisUI.db.questAutoComplete = not BenisUI.db.questAutoComplete
+		print('|cff1784d1Benis|rUI: auto quest turn-in ' .. (BenisUI.db.questAutoComplete and 'on' or 'off'))
+		return
+	elseif cmd == 'qa' then
+		local qa = BenisUI:GetModule('QuestAnnounce')
+		qa.debug = not qa.debug
+		print('|cff1784d1Benis|rUI: quest announce debug ' .. (qa.debug and 'on' or 'off'))
+		return
+	elseif cmd == 'plates' or cmd:find('^plates ') then
+		BenisUI:GetModule('Nameplates'):Command(cmd:sub(8))
 		return
 	end
 

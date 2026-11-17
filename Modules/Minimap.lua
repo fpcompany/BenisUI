@@ -59,6 +59,16 @@ local function SquareMinimap()
 
 	if _G.MinimapCompassTexture then _G.MinimapCompassTexture:SetAlpha(0) end
 
+	-- The hatched ring drawn round the player while inside a quest, bonus
+	-- objective or dig site area. The area's own outline stays. Not every
+	-- client has every kind, hence the method checks.
+	for _, kind in ipairs({ 'Quest', 'Task', 'Arch' }) do
+		local alpha = minimap['Set' .. kind .. 'BlobRingAlpha']
+		local scalar = minimap['Set' .. kind .. 'BlobRingScalar']
+		if alpha then alpha(minimap, 0) end
+		if scalar then scalar(minimap, 0) end
+	end
+
 	local cluster = _G.MinimapCluster
 	if cluster.BorderTop then cluster.BorderTop:SetAlpha(0) end
 	if cluster.ZoneTextButton then Skin:Kill(cluster.ZoneTextButton) end
@@ -109,6 +119,96 @@ local function CreateZoneText()
 	zoneText:SetJustifyH('CENTER')
 	zoneText:SetTextColor(1, 1, 1)
 	zoneText:SetWordWrap(false)
+end
+
+--------------------------------------------------------------------------------
+-- Player coordinates inside the map, along the bottom edge
+--------------------------------------------------------------------------------
+
+local COORD_INTERVAL = 0.2
+
+local function CreateCoords()
+	-- Forever's built-in readout (minimapShowPlayerCoords) sits below the map,
+	-- under the button bar; ours replaces it
+	local container = _G.MinimapCluster.MinimapContainer
+	if container and container.PlayerCoords then
+		Skin:Kill(container.PlayerCoords)
+	end
+
+	local holder = CreateFrame('Frame', nil, _G.Minimap)
+	holder:SetFrameLevel(_G.Minimap:GetFrameLevel() + 10)
+	holder:SetPoint('BOTTOMLEFT', 4, 4)
+	holder:SetPoint('BOTTOMRIGHT', -4, 4)
+	holder:SetHeight(14)
+
+	local text = holder:CreateFontString(nil, 'OVERLAY')
+	text:SetFont(FONT, 11, 'OUTLINE')
+	text:SetAllPoints()
+	text:SetJustifyH('CENTER')
+	text:SetTextColor(1, 1, 1)
+
+	local elapsed = COORD_INTERVAL
+	holder:SetScript('OnUpdate', function(_, delta)
+		elapsed = elapsed + delta
+		if elapsed < COORD_INTERVAL then return end
+		elapsed = 0
+
+		local mapID = C_Map.GetBestMapForUnit('player')
+		local position = mapID and C_Map.GetPlayerMapPosition(mapID, 'player')
+		local x, y
+		if position then x, y = position:GetXY() end
+		if x and y and (x > 0 or y > 0) then
+			text:SetFormattedText('%.1f, %.1f', x * 100, y * 100)
+		else
+			-- instances and some zones have no map position
+			text:SetText('')
+		end
+	end)
+end
+
+--------------------------------------------------------------------------------
+-- Buffs: keep a gap between the aura icons and the map, debuffs lined up under them
+--------------------------------------------------------------------------------
+
+local AURA_GAP = 12
+local placingAuras = false
+
+local function IsDefault(frame)
+	-- only take over the default spot; a frame moved in Edit Mode stays put
+	return not (frame.IsInDefaultPosition and not frame:IsInDefaultPosition())
+end
+
+local function PlaceAuras()
+	if placingAuras or InCombatLockdown() then return end
+	local buffs, debuffs = _G.BuffFrame, _G.DebuffFrame
+
+	placingAuras = true
+	if buffs and IsDefault(buffs) then
+		buffs:ClearAllPoints()
+		buffs:SetPoint('TOPRIGHT', _G.Minimap, 'TOPLEFT', -AURA_GAP, 0)
+	end
+	if buffs and debuffs and IsDefault(debuffs) then
+		-- keep the debuffs at their own height, but right-align them with the
+		-- buff icons (not the collapse arrow) so both rows start at the same x
+		local icons = buffs.AuraContainer or buffs
+		local top, iconsTop = debuffs:GetTop(), icons:GetTop()
+		if top and iconsTop then
+			local scale = debuffs:GetEffectiveScale()
+			local y = (top * scale - iconsTop * icons:GetEffectiveScale()) / scale
+			debuffs:ClearAllPoints()
+			debuffs:SetPoint('TOPRIGHT', icons, 'TOPRIGHT', 0, y)
+		end
+	end
+	placingAuras = false
+end
+
+local function SetupAuras()
+	if not _G.BuffFrame then return end
+	hooksecurefunc(_G.BuffFrame, 'SetPoint', PlaceAuras)
+	if _G.DebuffFrame then
+		hooksecurefunc(_G.DebuffFrame, 'SetPoint', PlaceAuras)
+	end
+	PlaceAuras()
 end
 
 --------------------------------------------------------------------------------
@@ -310,20 +410,59 @@ local function CreateButtonBar()
 end
 
 --------------------------------------------------------------------------------
+-- Durability figure: left of the button bar instead of behind it
+--------------------------------------------------------------------------------
+
+local DURABILITY_GAP = 12
+
+-- Blizzard stacks the damaged-armor figure in the right-side managed
+-- container, which starts right under the map: exactly where the button bar
+-- sits. The container re-anchors it on every layout, so it is moved again
+-- after each one. Nothing is written to Blizzard's frames (no taint), and
+-- the raw anchor methods skip Edit Mode's snap/dirty bookkeeping.
+local function PlaceDurability()
+	local frame = _G.DurabilityFrame
+	local container = _G.RightManagedFrameContainer
+	-- only while the container owns it; moved in Edit Mode it stays put
+	if not (container.showingFrames and container.showingFrames[frame]) then return end
+
+	local clearAllPoints = frame.ClearAllPointsBase or frame.ClearAllPoints
+	local setPoint = frame.SetPointBase or frame.SetPoint
+	clearAllPoints(frame)
+	setPoint(frame, 'TOPRIGHT', buttonBar, 'TOPLEFT', -DURABILITY_GAP / frame:GetScale(), 0)
+end
+
+local function SetupDurability()
+	local container = _G.RightManagedFrameContainer
+	if not (_G.DurabilityFrame and container and container.Layout) then return end
+	hooksecurefunc(container, 'Layout', PlaceDurability)
+	PlaceDurability()
+end
+
+--------------------------------------------------------------------------------
 -- Init
 --------------------------------------------------------------------------------
 
 function MinimapMod:OnInit()
 	SquareMinimap()
 	CreateZoneText()
+	CreateCoords()
 	CreateButtonBar()
+	SetupAuras()
+	SetupDurability()
 
 	local events = CreateFrame('Frame')
 	events:RegisterEvent('PLAYER_ENTERING_WORLD')
 	events:RegisterEvent('ZONE_CHANGED')
 	events:RegisterEvent('ZONE_CHANGED_INDOORS')
 	events:RegisterEvent('ZONE_CHANGED_NEW_AREA')
+	events:RegisterEvent('PLAYER_REGEN_ENABLED')
 	events:SetScript('OnEvent', function(_, event)
+		if event == 'PLAYER_REGEN_ENABLED' then
+			-- catch up on a placement skipped during combat
+			PlaceAuras()
+			return
+		end
 		UpdateZoneText()
 		if event == 'PLAYER_ENTERING_WORLD' then
 			ResizeMinimap()

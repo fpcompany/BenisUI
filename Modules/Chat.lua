@@ -47,15 +47,55 @@ local function PlainText(text)
 	text = text:gsub('|c%x%x%x%x%x%x%x%x', '')
 	text = text:gsub('|cn.-:', '') -- named colors: |cnCOLOR_NAME:text|r
 	text = text:gsub('|r', '')
+	text = text:gsub('|K.-|k', '') -- Battle.net name tokens
+	text = text:gsub('|n', ' ')
+	-- a stray pipe starts an escape the edit box chokes on, which can blank
+	-- the whole text; doubled it shows as a plain |
+	text = text:gsub('|', '||')
 	return text
 end
 
+-- Every line a chat window shows is also kept here, so the copy window never
+-- depends on the frame handing its history back (Midnight's chat frames
+-- don't always do that).
+local HISTORY_LINES = 500
+local SECRET_LINE = '<message hidden by the game>'
+
+local function RecordLine(chatFrame, text)
+	local log = chatFrame.BenisUILog
+	if not log then
+		log = {}
+		chatFrame.BenisUILog = log
+	end
+	if issecretvalue and issecretvalue(text) then
+		log[#log + 1] = SECRET_LINE
+	elseif type(text) == 'string' then
+		log[#log + 1] = text
+	else
+		return
+	end
+	if #log > HISTORY_LINES * 1.2 then
+		local trimmed = {}
+		for i = #log - HISTORY_LINES + 1, #log do trimmed[#trimmed + 1] = log[i] end
+		chatFrame.BenisUILog = trimmed
+	end
+end
+
 local function CollectLines(chatFrame)
+	local source = chatFrame.BenisUILog
+	if not source or #source == 0 then
+		source = {}
+		local count = chatFrame.GetNumMessages and chatFrame:GetNumMessages() or 0
+		for index = 1, count do
+			local text = chatFrame:GetMessageInfo(index)
+			source[#source + 1] = (issecretvalue and issecretvalue(text)) and SECRET_LINE or text
+		end
+	end
+
 	local lines = {}
-	for index = 1, chatFrame:GetNumMessages() do
-		local text = chatFrame:GetMessageInfo(index)
-		if issecretvalue and issecretvalue(text) then
-			lines[#lines + 1] = '<message hidden by the game>'
+	for _, text in ipairs(source) do
+		if text == SECRET_LINE then
+			lines[#lines + 1] = text
 		elseif type(text) == 'string' then
 			lines[#lines + 1] = PlainText(text)
 		end
@@ -122,7 +162,8 @@ local function CreateCopyFrame()
 	copyBox:SetMaxLetters(0)
 	copyBox:SetFont(FONT, 13, '')
 	copyBox:SetTextColor(1, 1, 1)
-	copyBox:SetWidth(copyScroll:GetWidth())
+	copyBox:SetPoint('TOPLEFT')
+	copyBox:SetSize(600, 380) -- replaced by the real width once shown
 	copyScroll:SetScrollChild(copyBox)
 	copyScroll:SetScript('OnSizeChanged', function(_, width) copyBox:SetWidth(width) end)
 
@@ -154,15 +195,21 @@ end
 function Chat:ShowCopy(chatFrame)
 	if not copyFrame then CreateCopyFrame() end
 
-	local text = CollectLines(chatFrame)
-	copyBox.original = text
-	copyBox:SetText(text)
-
 	local tab = _G[chatFrame:GetName() .. 'Tab']
 	local name = tab and tab:GetText() or chatFrame:GetName()
 	copyFrame.title:SetText('|cff1784d1Benis|rUI Chat: ' .. name)
 
 	copyFrame:Show()
+
+	-- a scroll child with no width lays its text out into nothing; size it
+	-- now that the panel is shown and measured
+	local width = copyScroll:GetWidth()
+	if width and width > 0 then copyBox:SetWidth(width) end
+
+	local text = CollectLines(chatFrame)
+	if text == '' then text = '(this window has no messages yet)' end
+	copyBox.original = text
+	copyBox:SetText(text)
 	copyBox:SetFocus()
 	copyBox:SetCursorPosition(#text)
 	-- the scroll range only updates once the text is laid out
@@ -287,7 +334,37 @@ local function WrapAddMessage(chatFrame)
 		if not (issecretvalue and issecretvalue(text)) and type(text) == 'string' then
 			text = ShortenChannels(text)
 		end
+		RecordLine(self, text)
 		return original(self, text, ...)
+	end
+end
+
+--------------------------------------------------------------------------------
+-- Spam filter
+--------------------------------------------------------------------------------
+
+-- Gold sellers post community invites named after their site
+-- ("[Join: WWW,XYZ,COM-Player buy&sell ...]"). No real player needs those in
+-- public chat, so any message carrying a community or club-finder link is
+-- dropped before it reaches a window.
+local SPAM_EVENTS = {
+	'CHAT_MSG_CHANNEL', 'CHAT_MSG_SAY', 'CHAT_MSG_YELL', 'CHAT_MSG_EMOTE',
+	'CHAT_MSG_WHISPER',
+}
+
+local function IsJoinSpam(_, _, msg)
+	if type(msg) ~= 'string' or (issecretvalue and issecretvalue(msg)) then return false end
+	return msg:find('|HclubFinder:') ~= nil
+		or msg:find('|HclubTicket:') ~= nil
+		or msg:find('|Hcommunity') ~= nil
+		or msg:find('%[Join: ') ~= nil
+end
+
+local function InstallSpamFilter()
+	local add = (ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter) or ChatFrame_AddMessageEventFilter
+	if not add then return end
+	for _, event in next, SPAM_EVENTS do
+		add(event, IsJoinSpam)
 	end
 end
 
@@ -314,6 +391,63 @@ local function SkinTab(tab)
 	end
 end
 
+--------------------------------------------------------------------------------
+-- Sent-message history
+--------------------------------------------------------------------------------
+
+-- Blizzard's own history stores each line with its channel prefix ("/g hi"),
+-- so recalling one drags the input box back to the channel it was sent in.
+-- Ours keeps only what was typed: Up/Down bring the text back and it goes to
+-- whichever channel the box is on now. One list for every chat window, saved
+-- account-wide.
+local HISTORY_MAX = 50
+
+local function OnHistoryLineAdded(editBox, line)
+	-- Blizzard adds the line while the typed text is still in the box
+	local text = editBox:GetText()
+	if not text or strtrim(text) == '' then text = line end
+	text = text and strtrim(text)
+
+	-- only ours answers the arrows
+	if editBox.ClearHistory then editBox:ClearHistory() end
+	editBox.BenisUIHistoryIndex = 0
+	editBox.BenisUIDraft = nil
+
+	if not text or text == '' then return end
+
+	local history = BenisUI.db.chat.history
+	if history[#history] == text then return end
+	history[#history + 1] = text
+	while #history > HISTORY_MAX do
+		table.remove(history, 1)
+	end
+end
+
+local function OnHistoryArrow(editBox, key)
+	if key ~= 'UP' and key ~= 'DOWN' then return end
+
+	local history = BenisUI.db.chat.history
+	local index = editBox.BenisUIHistoryIndex or 0 -- 0 is the unsent draft
+
+	if key == 'UP' then
+		if index >= #history then return end
+		if index == 0 then editBox.BenisUIDraft = editBox:GetText() end
+		index = index + 1
+	else
+		if index == 0 then return end
+		index = index - 1
+	end
+
+	editBox.BenisUIHistoryIndex = index
+	editBox:SetText(index == 0 and (editBox.BenisUIDraft or '') or history[#history - index + 1])
+	editBox:SetCursorPosition(#editBox:GetText())
+end
+
+local function ResetHistoryWalk(editBox)
+	editBox.BenisUIHistoryIndex = 0
+	editBox.BenisUIDraft = nil
+end
+
 local function SkinEditBox(chatFrame, editBox)
 	if not editBox or editBox.BenisUISkinned then return end
 
@@ -322,6 +456,11 @@ local function SkinEditBox(chatFrame, editBox)
 	-- the template's ignoreArrows: Left/Right move the cursor, Up/Down walk
 	-- the sent-message history
 	editBox:SetAltArrowKeyMode(false)
+
+	if editBox.ClearHistory then editBox:ClearHistory() end
+	hooksecurefunc(editBox, 'AddHistoryLine', OnHistoryLineAdded)
+	editBox:HookScript('OnArrowPressed', OnHistoryArrow)
+	editBox:HookScript('OnEditFocusGained', ResetHistoryWalk)
 
 	-- the default anchor hangs off the scrollbar we park; tie it to the chat
 	editBox:ClearAllPoints()
@@ -428,6 +567,7 @@ local function UpdateTabColors(tab, selected)
 end
 
 function Chat:OnInit()
+	InstallSpamFilter()
 	SkinAll()
 	ApplyFontSize()
 
@@ -552,3 +692,141 @@ function Chat:OnInit()
 	-- the combat log's filter bar
 	Skin:Strip(_G.CombatLogQuickButtonFrame_Custom)
 end
+
+--------------------------------------------------------------------------------
+-- /bait
+--------------------------------------------------------------------------------
+
+-- Sends a confidently wrong complaint to whichever channel the input box is
+-- on. The level baits brag about a level ten above ours (capped) and claim to
+-- be stuck 10-15 below it; the rest do the same with a skill or a gold total.
+local BAIT_LEVEL_CAP = 60
+local BAIT_LINE = 'How are people already %s? I %s but I\'m still %s. Yeah the game is ruined by exploiters.'
+
+-- "I <activity> ..." - each one slow, pointless or worth no experience at all
+local LEVEL_BAITS = {
+	'kill critters in Elwynn for 8 hours every day',
+	'only fight mobs 15 levels below me for 9 hours every day',
+	'stay logged out in an inn 22 hours every day to stack rested exp',
+	'duel outside Goldshire for 8 hours every day',
+	'walk instead of run between quests for 10 hours every day',
+	'fight with no weapon equipped for 8 hours every day',
+	'rediscover every zone on the map for 7 hours every day',
+	'do every grey quest in the starting zone for 8 hours every day',
+	'run Ragefire Chasm solo for 12 hours every day',
+	'pick Peacebloom for 8 hours every day',
+	'save all my quests for one big hand-in, 8 hours every day for a month now,',
+	'die on purpose and run back for 6 hours every day',
+	'dance on the Ironforge mailbox for 8 hours every day',
+	'only kill boars in the starting zone for 8 hours every day',
+}
+
+-- { what others "already" have, what we do about it, lowest and highest we claim to be stuck at }
+local OTHER_BAITS = {
+	{ '300 Fishing', 'fish in the Stormwind fountain for 8 hours every day', 12, 31, '%d' },
+	{ '300 First Aid', 'bandage myself at full health for 6 hours every day', 1, 40, '%d' },
+	{ '300 Cooking', 'cook Charred Wolf Meat for 8 hours every day', 20, 45, '%d' },
+	{ '300 Herbalism', 'pick only Peacebloom for 9 hours every day', 35, 60, '%d' },
+	{ '300 Mining', 'mine nothing but Copper for 8 hours every day', 40, 65, '%d' },
+	{ '300 Lockpicking', 'pick the same practice lockbox for 7 hours every day', 60, 95, '%d' },
+	{ 'riding an epic mount', 'vendor grey items from critters for 10 hours every day', 2, 9, 'at %d gold' },
+	{ 'at max weapon skill', 'punch level 1 rabbits unarmed for 8 hours every day', 15, 50, 'at %d' },
+	{ 'Exalted with Stormwind', 'kill Defias thugs outside Stormwind for 8 hours every day', 1, 1, 'Neutral' },
+}
+
+-- "I am going to make a reddit thread with petition to <idea>. Please upvote"
+local REDDIT_LINE = 'I am going to make a reddit thread with petition to %s. Please upvote'
+local REDDIT_BAITS = {
+	'add Vulperas to Forever',
+	'nerf hunters',
+	'add flying mounts to Forever',
+	'add a dungeon finder with teleports',
+	'add a level 60 boost to the shop',
+	'add the WoW Token',
+	'remove world PvP',
+	'make all loot personal',
+	'add raid finder difficulty',
+	'buff rogues',
+	'remove the talent trees',
+	'add heirlooms',
+	'make mounts free at level 1',
+	'remove the corpse run',
+	'add pet battles',
+	'let Alliance and Horde group together',
+	'add Mythic+ to all dungeons',
+	'remove professions because they are boring',
+	'nerf %s', -- filled with a random classic class
+	'make every class able to tank',
+	'add transmog and a cash shop for it',
+	'remove mana because drinking is not fun',
+}
+
+-- Hero classes that don't exist on Forever. %1$s is the class, %2$d the level
+-- we insist unlocks it (always one we have already reached), %3$d our level.
+local HERO_CLASSES = { 'Death Knight', 'Demon Hunter', 'Evoker' }
+local HERO_BAITS = {
+	'How do I unlock %1$s? You need level %2$d and I\'m already %3$d but the class is still not on my character screen.',
+	'I hit level %2$d days ago and %1$s is still locked for me. Where is the quest? I\'m %3$d now and nothing.',
+	'Is %1$s bugged? The requirement is level %2$d, I\'m %3$d and I still can\'t create one. Already opened 3 tickets.',
+	'Why can everyone else make a %1$s? I\'m level %3$d, way past the %2$d you need, and the button is not even there.',
+	'Can a GM unlock %1$s for me? I met the level %2$d requirement (I\'m %3$d) and relogged 20 times. Still nothing.',
+	'Anyone else not getting the %1$s unlock at %2$d? I\'m %3$d. My friend got his at %2$d instantly.',
+}
+
+local function BuildHeroBait()
+	local level = UnitLevel('player') or 1
+	-- the "requirement" is the last multiple of five we passed
+	local required = math.max(1, math.floor(level / 5) * 5)
+	return HERO_BAITS[math.random(#HERO_BAITS)]:format(HERO_CLASSES[math.random(#HERO_CLASSES)], required, level)
+end
+
+local function BuildBait()
+	local roll = math.random(4)
+	if roll == 1 then
+		return BuildHeroBait()
+	elseif roll < 4 then
+		local level = UnitLevel('player') or 1
+		local theirs = math.min(level + 10, BAIT_LEVEL_CAP)
+		local mine = math.max(1, level - math.random(10, 15))
+		return BAIT_LINE:format(theirs .. '+', LEVEL_BAITS[math.random(#LEVEL_BAITS)], tostring(mine))
+	end
+	local bait = OTHER_BAITS[math.random(#OTHER_BAITS)]
+	return BAIT_LINE:format(bait[1], bait[2], bait[5]:format(math.random(bait[3], bait[4])))
+end
+
+local CLASSIC_CLASSES = { 'warriors', 'paladins', 'hunters', 'rogues', 'priests', 'shamans', 'mages', 'warlocks', 'druids' }
+
+local function BuildRedditBait()
+	local idea = REDDIT_BAITS[math.random(#REDDIT_BAITS)]:format(CLASSIC_CLASSES[math.random(#CLASSIC_CLASSES)])
+	return REDDIT_LINE:format(idea)
+end
+
+local function SendBait(text, editBox)
+	editBox = editBox or (ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow())
+		or (_G.DEFAULT_CHAT_FRAME and _G.DEFAULT_CHAT_FRAME.editBox)
+
+	local chatType = editBox and editBox:GetAttribute('chatType') or 'SAY'
+
+	if chatType == 'BN_WHISPER' then
+		local target = editBox:GetAttribute('tellTarget')
+		local id = target and BNet_GetBNetIDAccount and BNet_GetBNetIDAccount(target)
+		if id then (C_BattleNet and C_BattleNet.SendWhisper or BNSendWhisper)(id, text) end
+		return
+	end
+
+	local target
+	if chatType == 'WHISPER' then
+		target = editBox:GetAttribute('tellTarget')
+	elseif chatType == 'CHANNEL' then
+		target = editBox:GetAttribute('channelTarget')
+	end
+
+	local send = C_ChatInfo and C_ChatInfo.SendChatMessage or SendChatMessage
+	send(text, chatType, editBox and editBox.languageID or nil, target)
+end
+
+SLASH_BENISUIBAIT1 = '/bait'
+SlashCmdList.BENISUIBAIT = function(_, editBox) SendBait(BuildBait(), editBox) end
+
+SLASH_BENISUIREDDIT1 = '/reddit'
+SlashCmdList.BENISUIREDDIT = function(_, editBox) SendBait(BuildRedditBait(), editBox) end
