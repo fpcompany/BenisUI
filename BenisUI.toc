@@ -5,6 +5,7 @@
 ## Version: 0.1.0
 ## SavedVariables: BenisUIDB
 ## SavedVariablesPerCharacter: BenisUICharDB
+## OptionalDeps: Auctionator
 ## Category-enUS: UI Overhaul
 ## IconTexture: Interface\AddOns\BenisUI\Media\Icon
 ## X-Website: https://github.com/fpcompany/BenisUI
@@ -17,6 +18,7 @@ Modules\Bags.lua
 Modules\BagsForever.lua
 Modules\BagsRecipe.lua
 Modules\BagsCategories.lua
+Modules\BagsAuction.lua
 Modules\Character.lua
 Modules\Inspect.lua
 Modules\UnitFrames.lua

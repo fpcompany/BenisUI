@@ -1,1 +1,3 @@
 dist/
+dev-link.sh
+dev-unlink.sh

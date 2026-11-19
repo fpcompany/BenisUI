@@ -325,10 +325,12 @@ end
 
 function Bags:LayoutCategories(view)
 	local db = self.db
-	local slotSize = view.config.slotSize
-	local step = slotSize + db.spacing
+	local function snap(value) return self:Snap(view.frame, value) end
+	local slotSize = snap(view.config.slotSize)
+	local spacing = snap(db.spacing)
+	local step = slotSize + spacing
 	local columns = view.config.columns
-	local totalWidth = columns * step - db.spacing
+	local totalWidth = columns * step - spacing
 	local originY = self.HEADER_HEIGHT + self.BAR_HEIGHT + self.FRAME_PADDING
 
 	-- sort every slot into its category, in bag order
@@ -376,19 +378,19 @@ function Bags:LayoutCategories(view)
 			if label then label:Hide() end
 		else
 			label = GetLabel(view, category)
-			local labelHeight = label:GetStringHeight()
+			local labelHeight = snap(label:GetStringHeight())
 
 			local cols = math.min(#group, columns)
 			local rows = math.ceil(#group / columns)
-			local blockWidth = math.max(cols * step - db.spacing, label:GetStringWidth())
-			local blockHeight = labelHeight + LABEL_GAP + rows * step - db.spacing
+			local blockWidth = snap(math.max(cols * step - spacing, label:GetStringWidth()))
+			local blockHeight = labelHeight + LABEL_GAP + rows * step - spacing
 
 			if x > 0 and x + blockWidth > totalWidth then
 				x, y, lineHeight = 0, y + lineHeight + LINE_GAP, 0
 			end
 
-			local left = self.FRAME_PADDING + x
-			local top = originY + y
+			local left = snap(self.FRAME_PADDING + x)
+			local top = snap(originY + y)
 			label:ClearAllPoints()
 			label:SetPoint('TOPLEFT', view.frame, 'TOPLEFT', left, -top)
 			label:Show()
@@ -408,8 +410,8 @@ function Bags:LayoutCategories(view)
 	end
 
 	view.frame:SetSize(
-		self.FRAME_PADDING * 2 + totalWidth,
-		originY + y + lineHeight + self.FRAME_PADDING + self.FOOTER_HEIGHT)
+		snap(self.FRAME_PADDING * 2 + totalWidth),
+		snap(originY + y + lineHeight + self.FRAME_PADDING + self.FOOTER_HEIGHT))
 end
 
 --------------------------------------------------------------------------------

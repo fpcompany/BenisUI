@@ -67,6 +67,7 @@ local charDefaults = {
 	bags = {
 		setHighlights = {}, -- [setID] = { enabled = bool, r, g, b (nil = quality color) }
 		categoryMode = false, -- inventory grouped by category instead of bag order
+		auctionFilter = false, -- grey out items not worth auctioning
 	},
 	chat = {
 		fontSize = 12, -- every chat window; picking a size in the tab menu updates it

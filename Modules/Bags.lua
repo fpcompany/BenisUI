@@ -558,8 +558,24 @@ end
 -- Slot borders
 --------------------------------------------------------------------------------
 
-local function SetSlotBorder(slot, size, r, g, b)
+-- One physical screen pixel in `frame`'s units. Borders are sized and slots
+-- placed in whole pixels of these; at any UI scale but 768/height a plain
+-- 1-unit edge rounds to one pixel on some sides and two on others.
+function Bags:Pixel(frame)
+	local _, height = GetPhysicalScreenSize()
+	return 768 / height / frame:GetEffectiveScale()
+end
+
+-- `value` rounded onto `frame`'s pixel grid
+function Bags:Snap(frame, value)
+	local pixel = self:Pixel(frame)
+	return math.floor(value / pixel + 0.5) * pixel
+end
+
+-- `size` is in physical pixels
+local function SetSlotBorder(slot, pixels, r, g, b)
 	local border = slot.qualityBorder
+	local size = pixels * Bags:Pixel(slot)
 
 	if border.edgeSize ~= size then
 		border.edgeSize = size
@@ -720,6 +736,8 @@ function Bags:UpdateSlot(slot)
 	slot.desaturated = desaturated -- applied in ApplySearchToSlot
 	slot.itemID = hasItem and info.itemID or nil -- for the recipe filter
 	slot.itemName = hasItem and info.itemName or nil
+	slot.itemLink = hasItem and info.hyperlink or nil -- for the auction filter
+	slot.isBound = hasItem and info.isBound or false
 
 	local special = hasItem and GetSpecialColor(info.itemID)
 	if special then
@@ -882,9 +900,10 @@ function Bags:ApplySearchToSlot(slot)
 	local searching = query and query ~= ''
 	local matches = not searching or self:SlotMatchesSearch(slot)
 
-	-- a search overrides the recipe filter, so anything can still be looked up
-	local dimmed = self.recipeItems ~= nil and not searching and slot.itemID ~= nil
-		and not self:SlotIsRecipeItem(slot)
+	-- a search overrides the recipe and auction filters, so anything can still be looked up
+	local dimmed = not searching and slot.itemID ~= nil
+		and ((self.recipeItems ~= nil and not self:SlotIsRecipeItem(slot))
+			or (self.SlotIsUnprofitable and self:SlotIsUnprofitable(slot)))
 
 	-- hovering a bag / bank tab button dims every slot outside it
 	local hoverBag = slot.view.hoverBag
@@ -1022,14 +1041,42 @@ function Bags:UpdateFooter(view)
 	end
 end
 
+-- gold at the start of the session, kept in the character DB so a /reload
+-- doesn't reset it; a fresh login (isInitialLogin) does
+function Bags:UpdateSessionMoney(isInitialLogin)
+	local db = BenisUI.chardb
+	if isInitialLogin or not db.sessionStartMoney then
+		db.sessionStartMoney = GetMoney()
+	end
+end
+
+function Bags:ShowMoneyTooltip(owner)
+	local start = BenisUI.chardb.sessionStartMoney or GetMoney()
+	local diff = GetMoney() - start
+	GameTooltip:SetOwner(owner, 'ANCHOR_TOPRIGHT')
+	GameTooltip:SetText(MONEY or 'Money')
+	GameTooltip:AddDoubleLine('Session start', GetMoneyString(start, true), 1, 1, 1, 1, 1, 1)
+	local sign, r, g, b = '', 1, 1, 1
+	if diff > 0 then
+		sign, r, g, b = '+', 0, 1, 0
+	elseif diff < 0 then
+		sign, r, g, b = '-', 1, 0.13, 0.13
+	end
+	local change = sign .. GetMoneyString(math.abs(diff), true)
+	GameTooltip:AddDoubleLine('Change', change, 1, 1, 1, r, g, b)
+	GameTooltip:Show()
+end
+
 --------------------------------------------------------------------------------
 -- Layout
 --------------------------------------------------------------------------------
 
 function Bags:Layout(view)
 	local db = self.db
-	local slotSize = view.config.slotSize
-	local step = slotSize + db.spacing
+	local function snap(value) return self:Snap(view.frame, value) end
+	local slotSize = snap(view.config.slotSize)
+	local spacing = snap(db.spacing)
+	local step = slotSize + spacing
 	local columns = view.config.columns
 	local originY = HEADER_HEIGHT + BAR_HEIGHT + FRAME_PADDING
 
@@ -1099,7 +1146,8 @@ function Bags:Layout(view)
 				label:SetPoint('TOPLEFT', view.frame, 'TOPLEFT',
 					FRAME_PADDING, -(originY + row * step + yOffset + SECTION_GAP))
 				label:Show()
-				yOffset = yOffset + SECTION_GAP + label:GetStringHeight() + 4
+				-- label heights are fractional; keep the slots below on the grid
+				yOffset = snap(yOffset + SECTION_GAP + label:GetStringHeight() + 4)
 			end
 
 			for _, bagID in ipairs(sectionBags) do
@@ -1111,8 +1159,8 @@ function Bags:Layout(view)
 					local slot = bagSlots[slotID]
 					slot:ClearAllPoints()
 					slot:SetPoint('TOPLEFT', view.frame, 'TOPLEFT',
-						FRAME_PADDING + col * step,
-						-(originY + row * step + yOffset))
+						snap(FRAME_PADDING + col * step),
+						-snap(originY + row * step + yOffset))
 					slot:SetSize(slotSize, slotSize)
 					slot:Show()
 
@@ -1133,8 +1181,8 @@ function Bags:Layout(view)
 	end
 
 	view.frame:SetSize(
-		FRAME_PADDING * 2 + columns * step - db.spacing,
-		originY + row * step - db.spacing + yOffset + FRAME_PADDING + FOOTER_HEIGHT)
+		snap(FRAME_PADDING * 2 + columns * step - spacing),
+		snap(originY + row * step - spacing + yOffset + FRAME_PADDING + FOOTER_HEIGHT))
 end
 
 --------------------------------------------------------------------------------
@@ -1439,10 +1487,11 @@ function Bags:CreateView(config)
 
 	local pos = db[config.positionKey]
 	if pos then
-		frame:SetPoint(pos.point, UIParent, pos.point, pos.x, pos.y)
+		frame:SetPoint(pos.point, UIParent, pos.point, Bags:Snap(frame, pos.x), Bags:Snap(frame, pos.y))
 	else
 		local default = config.defaultPosition
-		frame:SetPoint(default.point, UIParent, default.point, default.x, default.y)
+		frame:SetPoint(default.point, UIParent, default.point,
+			Bags:Snap(frame, default.x), Bags:Snap(frame, default.y))
 	end
 
 	-- title bar (drag handle)
@@ -1457,6 +1506,10 @@ function Bags:CreateView(config)
 	header:SetScript('OnDragStop', function()
 		frame:StopMovingOrSizing()
 		local point, _, _, x, y = frame:GetPoint()
+		-- dragging leaves the frame between pixels, and every slot with it
+		x, y = Bags:Snap(frame, x), Bags:Snap(frame, y)
+		frame:ClearAllPoints()
+		frame:SetPoint(point, UIParent, point, x, y)
 		db[config.positionKey] = { point = point, x = x, y = y }
 	end)
 
@@ -1516,6 +1569,10 @@ function Bags:CreateView(config)
 		self:CreateCategoryToggle(view)
 	end
 
+	if config.auctionFilter and self.CreateAuctionFilter then
+		self:CreateAuctionFilter(view)
+	end
+
 	self:CreateBagBar(view)
 
 	-- footer
@@ -1537,6 +1594,13 @@ function Bags:CreateView(config)
 	else
 		view.moneyText = frame:CreateFontString(nil, 'OVERLAY', 'GameFontNormalSmall')
 		view.moneyText:SetPoint('BOTTOMRIGHT', -FRAME_PADDING, FRAME_PADDING)
+
+		-- hover area over the gold: shows gold at session start and the change
+		local hover = CreateFrame('Frame', nil, frame)
+		hover:SetAllPoints(view.moneyText)
+		hover:EnableMouse(true)
+		hover:SetScript('OnEnter', function(owner) Bags:ShowMoneyTooltip(owner) end)
+		hover:SetScript('OnLeave', function() GameTooltip:Hide() end)
 	end
 
 	-- drives the marching ants sprite sheet; parented to the view frame so it
@@ -1625,6 +1689,7 @@ local BAG_EVENTS = {
 	'ITEM_LOCK_CHANGED',
 	'PLAYER_EQUIPMENT_CHANGED',
 	'PLAYER_MONEY',
+	'PLAYER_ENTERING_WORLD',
 	'BANKFRAME_OPENED',
 	'BANKFRAME_CLOSED',
 	'PLAYERBANKSLOTS_CHANGED',
@@ -1690,6 +1755,8 @@ function Bags:OnEvent(event, arg1, arg2)
 			self:Layout(self.bank)
 			self:UpdateAll(self.bank)
 		end
+	elseif event == 'PLAYER_ENTERING_WORLD' then
+		self:UpdateSessionMoney(arg1)
 	elseif event == 'PLAYER_MONEY' then
 		if self.inventory.frame:IsShown() then
 			self:UpdateFooter(self.inventory)
@@ -1813,6 +1880,7 @@ function Bags:OnInit()
 		title = '|cff1784d1Benis|rUI Inventory',
 		isBank = false,
 		categories = true, -- category view toggle (BagsCategories.lua)
+		auctionFilter = true, -- AH profit checkbox (BagsAuction.lua)
 		columns = self.db.columns,
 		slotSize = self.db.slotSize,
 		positionKey = 'position',
