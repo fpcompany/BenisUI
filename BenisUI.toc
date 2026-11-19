@@ -2,7 +2,7 @@
 ## Title: |cff1784d1Benis|rUI
 ## Notes: Full UI replacement. Currently replaces the inventory with a combined bag frame.
 ## Author: Benis
-## Version: 0.1.0
+## Version: 0.2.0
 ## SavedVariables: BenisUIDB
 ## SavedVariablesPerCharacter: BenisUICharDB
 ## OptionalDeps: Auctionator
