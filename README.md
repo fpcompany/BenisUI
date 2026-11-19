@@ -37,6 +37,12 @@ Replaces the default inventory with a single combined frame:
   splitting stacks), Quest, Equipment, Consumables, Reagents (reagent bag plus
   all crafting materials), Other and Junk. Items keep bag order inside each
   block. Shaman totems are hidden. The mode is saved per character.
+- Upgrade arrows: a green arrow on gear that beats what you wear. On retail
+  that means a higher item level. On WoW Forever it means a higher score from
+  the stat weights of [LibBenisScore](https://github.com/fpcompany/LibBenisScore),
+  which BenisAH uses too. Pick your spec's preset and edit the weights with
+  `/bscore`. They're saved per character and shared with BenisAH. Item
+  tooltips show the score change too ("Upgrade for Main hand: score x -> y").
 - Sort button (Blizzard's `C_Container.SortBags`), free-slot counter, gold
   display, draggable frame (position is saved), ESC / `B` / all default bag
   keybinds work, merchant/mailbox auto-open works.
@@ -93,9 +99,13 @@ Symlink or copy the folder into your AddOns directory:
 ln -s /path/to/BenisUI "<WoW>/_retail_/Interface/AddOns/BenisUI"
 ```
 
+LibBenisScore is a git submodule in `Libs/LibBenisScore`. Clone with
+`--recurse-submodules`, or run `git submodule update --init` after cloning.
+
 ## Commands
 
 - `/benisui` or `/bui` — toggle the inventory
+- `/bscore` — stat weights for the upgrade arrows
 - `/bui rolltest` — fill the loot roll panel with fake rolls
 - `/bui plates on | off` — these nameplates or the default ones (`/reload`)
 - `/bui plates scale <0.5-3 | auto>` — nameplate size (`/reload`)

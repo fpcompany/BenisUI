@@ -196,79 +196,11 @@ end
 -- Forever (Interface 16001) is a vanilla-style ruleset: item level says little
 -- about gear, so arrows come from comparing stats instead.
 local IS_FOREVER = (select(4, GetBuildInfo()) or 0) < 20000
-local GetItemStats = C_Item.GetItemStats or _G.GetItemStats
-local GetInventoryItemLink = GetInventoryItemLink
-
--- Per-class stat weights. Only shaman is known; other classes get no arrows on
--- Forever. Any stat not listed but present counts OTHER_STAT_WEIGHT per point,
--- so any stats beat no stats. Armor is never weighed against stats: it only
--- breaks ties when the stat scores are equal.
-local OTHER_STAT_WEIGHT = 1
-local ARMOR_STAT = 'RESISTANCE0_NAME'
-local CLASS_STAT_WEIGHTS = {
-	-- WoW Forever enhancement guide:
-	-- Strength = Attack Power > Intellect > Spell Power = Agility > Spirit,
-	-- crit chance is very important (Flurry), hit is not a priority while leveling
-	SHAMAN = {
-		ITEM_MOD_STRENGTH_SHORT = 10,
-		ITEM_MOD_ATTACK_POWER_SHORT = 10,
-		ITEM_MOD_INTELLECT_SHORT = 8,
-		ITEM_MOD_SPELL_POWER_SHORT = 6,
-		ITEM_MOD_SPELL_DAMAGE_DONE_SHORT = 6,
-		ITEM_MOD_AGILITY_SHORT = 6,
-		ITEM_MOD_SPIRIT_SHORT = 2,
-		ITEM_MOD_STAMINA_SHORT = 4,
-		ITEM_MOD_CRIT_RATING_SHORT = 140, -- per 1% crit, roughly 20 Agility's crit plus Flurry
-		ITEM_MOD_CRIT_MELEE_RATING_SHORT = 140,
-		ITEM_MOD_HIT_RATING_SHORT = 15, -- per 1% hit, low while leveling
-		ITEM_MOD_HIT_MELEE_RATING_SHORT = 15,
-		ITEM_MOD_DAMAGE_PER_SECOND_SHORT = 10, -- weapon DPS
-		[ARMOR_STAT] = 0, -- tie-breaker only, see ScoreLink
-	},
-}
-
-local playerWeights
-local function GetPlayerWeights()
-	if playerWeights == nil then
-		local _, classToken = UnitClass('player')
-		playerWeights = CLASS_STAT_WEIGHTS[classToken] or false
-	end
-	return playerWeights
-end
-
--- returns statScore, armor (0, 0 for nothing / unknown item)
-local function ScoreLink(link, weights)
-	local stats = link and GetItemStats(link)
-	if not stats then return 0, 0 end
-
-	local score = 0
-	for stat, value in pairs(stats) do
-		if stat ~= ARMOR_STAT then
-			score = score + (weights[stat] or OTHER_STAT_WEIGHT) * value
-		end
-	end
-	return score, stats[ARMOR_STAT] or 0
-end
-
-local function ScoreInvSlot(invSlot, weights)
-	return ScoreLink(GetInventoryItemLink('player', invSlot), weights)
-end
-
-local function IsBetter(score, armor, otherScore, otherArmor)
-	if score ~= otherScore then return score > otherScore end
-	return armor > otherArmor
-end
-
-local function IsTwoHandEquipped()
-	local link = GetInventoryItemLink('player', 16)
-	if not link then return false end
-	local _, _, _, equipLoc = GetItemInfoInstant(link)
-	return equipLoc == 'INVTYPE_2HWEAPON'
-end
-
-local OFFHAND_LOCS = {
-	INVTYPE_WEAPONOFFHAND = true, INVTYPE_SHIELD = true, INVTYPE_HOLDABLE = true,
-}
+-- Stat weights, scores and what an item would replace come from
+-- LibBenisScore, shared with BenisAH: per spec presets, edited in its panel
+-- (/bscore) and saved per character.
+local Score = LibStub('LibBenisScore-1.0')
+local UPGRADE_EPSILON = 0.001
 
 -- red tooltip text means the player can't use it (class, proficiency, level)
 local function HasRedLine(data)
@@ -393,40 +325,10 @@ local function IsBestArmorType(link, equipLoc)
 	return not best or rank >= best
 end
 
--- better stats than what it would replace, for the player's class?
-local function IsStatUpgrade(link, equipLoc)
-	local weights = GetPlayerWeights()
-	if not weights then return false end
-
-	local invSlots = EQUIP_LOC_SLOTS[equipLoc]
-	if not invSlots then return false end
-
-	local score, armor = ScoreLink(link, weights)
-	if score <= 0 and armor <= 0 then return false end
-
-	local otherScore, otherArmor
-	if equipLoc == 'INVTYPE_2HWEAPON' then
-		-- replaces both hands
-		local mainScore, mainArmor = ScoreInvSlot(16, weights)
-		local offScore, offArmor = ScoreInvSlot(17, weights)
-		otherScore, otherArmor = mainScore + offScore, mainArmor + offArmor
-	elseif OFFHAND_LOCS[equipLoc] and IsTwoHandEquipped() then
-		-- an off-hand would replace the two-hander
-		otherScore, otherArmor = ScoreInvSlot(16, weights)
-	else
-		if equipLoc == 'INVTYPE_WEAPON' and not (CanDualWield and CanDualWield()) then
-			invSlots = { 16 }
-		end
-		-- compete with the weakest equipped piece in the slot group
-		for _, invSlot in ipairs(invSlots) do
-			local s, a = ScoreInvSlot(invSlot, weights)
-			if not otherScore or IsBetter(otherScore, otherArmor, s, a) then
-				otherScore, otherArmor = s, a
-			end
-		end
-	end
-
-	return IsBetter(score, armor, otherScore, otherArmor)
+-- better stats than what it would replace, by the character's stat weights?
+local function IsStatUpgrade(link)
+	local result = Score:Compare(link)
+	return result ~= nil and result.gain > UPGRADE_EPSILON
 end
 
 -- gear upgrade check shared by bag slots and quest rewards: stats on Forever,
@@ -435,7 +337,7 @@ end
 local function IsUpgrade(link, equipLoc, itemLevel, isUsable)
 	local better
 	if IS_FOREVER then
-		better = IsStatUpgrade(link, equipLoc)
+		better = IsStatUpgrade(link)
 	else
 		better = IsItemLevelUpgrade(itemLevel, equipLoc)
 	end
@@ -1866,6 +1768,10 @@ Bags.FRAME_PADDING = FRAME_PADDING
 Bags.FOOTER_HEIGHT = FOOTER_HEIGHT
 
 function Bags:OnInit()
+	-- new stat weights move the upgrade arrows
+	Score:RegisterCallback(Bags, function()
+		if Bags.views then Bags:UpdateShownViews() end
+	end)
 	self.db = BenisUI.db.bags
 	self.views = {}
 	self.viewByBagID = {}

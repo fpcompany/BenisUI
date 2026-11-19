@@ -95,6 +95,9 @@ loader:SetScript('OnEvent', function(_, event, arg1)
 		BenisUI.db = BenisUIDB
 		BenisUICharDB = CopyDefaults(charDefaults, BenisUICharDB)
 		BenisUI.chardb = BenisUICharDB
+		-- stat weights for the upgrade arrows, kept in step with BenisAH
+		BenisUICharDB.score = BenisUICharDB.score or {}
+		LibStub('LibBenisScore-1.0'):Register(BenisUICharDB.score)
 	elseif event == 'PLAYER_LOGIN' then
 		for _, module in pairs(BenisUI.modules) do
 			if module.OnInit then module:OnInit() end

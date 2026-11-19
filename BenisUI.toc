@@ -10,6 +10,7 @@
 ## IconTexture: Interface\AddOns\BenisUI\Media\Icon
 ## X-Website: https://github.com/fpcompany/BenisUI
 
+Libs\LibBenisScore\LibBenisScore.xml
 Core.lua
 Modules\Skin.lua
 Modules\AuraTimer.lua

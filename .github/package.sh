@@ -13,6 +13,10 @@ rm -rf dist && mkdir -p dist/stage
 
 # Files marked export-ignore in .gitattributes stay out of the zip.
 git archive --format=tar --prefix="$addon/" "$tag" | tar -x -C dist/stage
+# git archive leaves submodules (Libs/...) out: add each at the commit the tag pins.
+git ls-tree -r "$tag" | awk '$2 == "commit" { print $3, $4 }' | while read -r sha path; do
+    git -C "$path" archive --format=tar --prefix="$addon/$path/" "$sha" | tar -x -C dist/stage
+done
 (cd dist/stage && zip -qr -X "../$zip" "$addon")
 rm -rf dist/stage
 
